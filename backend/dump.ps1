@@ -1,0 +1,1 @@
+Invoke-WebRequest -Method GET -Uri http://localhost:8000/discover | Select-Object -ExpandProperty Content | ConvertFrom-Json | Select-Object title, timestamp, date_str | Select-Object -First 25 | ConvertTo-Json
