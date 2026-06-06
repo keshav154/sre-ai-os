@@ -1,0 +1,21 @@
+# Global OS files
+.DS_Store
+Thumbs.db
+
+# Root environment
+.env
+.env.local
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Ignore generated artifact logs
+.system_generated/
+scratch/
+brain/
