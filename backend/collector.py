@@ -1,4 +1,6 @@
 import datetime
+import logging
+import random
 from models import Article
 from database import get_db
 from obsidian import obsidian_writer
@@ -8,6 +10,8 @@ from bs4 import BeautifulSoup
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
 from duckduckgo_search import DDGS
+
+logger = logging.getLogger("collector")
 
 def scrape_youtube_transcript(video_id: str) -> str:
     try:
@@ -40,49 +44,44 @@ def ingest_url(url: str, db, summarize: bool = False):
         "403 forbidden", "404 not found", "error"
     ]
     
-    try:
-        if "youtube.com" in url or "youtu.be" in url:
-            video_id = extract_youtube_id(url)
-            if video_id:
-                content = scrape_youtube_transcript(video_id)
-                source = "YouTube"
-                title = f"YouTube Video ({video_id})"
-        else:
+    if "youtube.com" in url or "youtu.be" in url:
+        video_id = extract_youtube_id(url)
+        if video_id:
+            content = scrape_youtube_transcript(video_id)
+            source = "YouTube"
+            title = f"YouTube Video ({video_id})"
+    else:
+        try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
             response = requests.get(url, headers=headers, timeout=10)
             soup = BeautifulSoup(response.text, 'html.parser')
             raw_title = soup.title.string.strip() if soup.title else url
-            
-            # Reject Cloudflare / bot-challenge pages
-            if any(j in raw_title.lower() for j in JUNK_TITLES):
-                return {"error": f"Blocked by bot protection: '{raw_title}'. This site requires a browser to access.", "status": "blocked"}
-            
-            title = raw_title
-            paragraphs = soup.find_all('p')
-            content = " ".join([p.get_text() for p in paragraphs])
-            
-            # Reject if content is suspiciously short (bot wall with no text)
-            if len(content.strip()) < 100:
-                return {"error": f"No readable content found at this URL (possible paywall or bot protection).", "status": "blocked"}
-            
-            source = "Web/Article"
-    except Exception as e:
-        content = f"Failed to ingest content: {e}"
+        except Exception as e:
+            logger.warning("Failed to fetch %s: %s", url, e)
+            return {"error": f"Could not reach this URL: {e}", "status": "failed"}
+
+        # Reject Cloudflare / bot-challenge pages
+        if any(j in raw_title.lower() for j in JUNK_TITLES):
+            return {"error": f"Blocked by bot protection: '{raw_title}'. This site requires a browser to access.", "status": "blocked"}
+
+        title = raw_title
+        paragraphs = soup.find_all('p')
+        content = " ".join([p.get_text() for p in paragraphs])
+
+        # Reject if content is suspiciously short (bot wall with no text)
+        if len(content.strip()) < 100:
+            return {"error": f"No readable content found at this URL (possible paywall or bot protection).", "status": "blocked"}
+
+        source = "Web/Article"
 
     if not content.strip():
         content = "No readable text could be extracted."
 
     if summarize:
+        from llm_client import resolve_llm_config
         settings = db.query(Settings).first()
-        llm_engine = settings.llm_engine if settings else "ollama"
-        ollama_model = settings.ollama_model if settings else "llama3:latest"
-        api_key = None
-        if settings:
-            if llm_engine == "openrouter": api_key = settings.openrouter_key
-            elif llm_engine == "openai": api_key = settings.openai_key
-            elif llm_engine == "anthropic": api_key = settings.anthropic_key
-            elif llm_engine == "gemini": api_key = settings.gemini_key
-        
+        llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+
         prompt = f"You are an SRE AI. Summarize the following content in detail, extracting the most important key learning points for an SRE/DevOps engineer. Here is the content:\n\n{content[:15000]}"
         summary = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
     else:
@@ -109,17 +108,25 @@ import requests
 
 class SortedYoutubeSearch(YoutubeSearch):
     def _search(self):
+        import time as _time
+
         encoded_search = urllib.parse.quote_plus(self.search_terms)
         BASE_URL = "https://youtube.com"
         # sp=CAI%3D → Sort by Upload Date
         url = f"{BASE_URL}/results?search_query={encoded_search}&sp=CAI%3D"
-        
+
         attempts = 1
         response = requests.get(url, proxies=self.proxy, timeout=self.timeout).text
         while "ytInitialData" not in response and attempts <= self.retries:
+            # Exponential backoff + jitter instead of hammering YouTube
+            # immediately on failure (which risks IP-based throttling/CAPTCHA
+            # walls, especially now that we issue 6 variations x N keywords
+            # per discover run).
+            backoff = min(2 ** attempts, 10) + random.uniform(0, 1)
+            _time.sleep(backoff)
             response = requests.get(url, proxies=self.proxy, timeout=self.timeout).text
             attempts += 1
-            
+
         results = self._parse_html(response)
         if self.max_results is not None and len(results) > self.max_results:
             return results[: self.max_results]
@@ -134,23 +141,29 @@ def get_rss_timestamp(entry):
     return time.time()
 
 def parse_yt_time(time_str):
-    if not time_str: return time.time()
+    # Returns 0 (epoch) when the string can't be parsed, so unparseable
+    # entries sink to the bottom of a "newest first" sort instead of
+    # masquerading as brand new.
+    if not time_str: return 0
     now = time.time()
     time_str = str(time_str).lower()
     try:
-        match = re.search(r'(\d+)', time_str)
+        # Match the number together with its unit word so prefixes like
+        # "Streamed "/"Premiered " can't be mistaken for a "d" (day) unit.
+        match = re.search(r'(\d+)\s*(second|sec|minute|min|hour|hr|day|week|wk|month|mo|year|yr)', time_str)
         if match:
             val = int(match.group(1))
-            if 'second' in time_str or 'sec' in time_str: return now - val
-            if 'minute' in time_str or 'min' in time_str: return now - val * 60
-            if 'hour' in time_str or 'hr' in time_str: return now - val * 3600
-            if 'day' in time_str or 'd ' in time_str or re.search(r'\bd\b', time_str): return now - val * 86400
-            if 'week' in time_str or 'wk' in time_str: return now - val * 604800
-            if 'month' in time_str or 'mo' in time_str: return now - val * 2592000
-            if 'year' in time_str or 'yr' in time_str: return now - val * 31536000
-    except:
-        pass
-    return now
+            unit = match.group(2)
+            if unit in ('second', 'sec'): return now - val
+            if unit in ('minute', 'min'): return now - val * 60
+            if unit in ('hour', 'hr'): return now - val * 3600
+            if unit == 'day': return now - val * 86400
+            if unit in ('week', 'wk'): return now - val * 604800
+            if unit in ('month', 'mo'): return now - val * 2592000
+            if unit in ('year', 'yr'): return now - val * 31536000
+    except Exception:
+        logger.debug("Could not parse YouTube publish time %r", time_str)
+    return 0
 
 def clean_html(raw_html):
     if not raw_html: return ""
@@ -158,15 +171,80 @@ def clean_html(raw_html):
     cleantext = re.sub(cleanr, '', raw_html).strip()
     return cleantext[:150] + "..." if len(cleantext) > 150 else cleantext
 
-def live_discover(db):
+def fetch_youtube_via_api(keyword: str, api_key: str, two_years_ago: float, pages: int = 3):
+    """Uses the official YouTube Data API v3 (order=date) for exact publish
+    timestamps instead of scraping+guessing relative-time text. Used when
+    Settings.youtube_api_key is configured. Pages through up to `pages` *
+    50 results (the API's per-page max) to widen the result pool."""
+    local_results = []
+    page_token = None
+    try:
+        for _ in range(pages):
+            params = {
+                "key": api_key,
+                "q": keyword,
+                "part": "snippet",
+                "type": "video",
+                "order": "date",
+                "maxResults": 50,
+                "publishedAfter": datetime.datetime.utcfromtimestamp(two_years_ago).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = requests.get("https://www.googleapis.com/youtube/v3/search", params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            for item in data.get("items", []):
+                video_id = item.get("id", {}).get("videoId")
+                snippet = item.get("snippet", {})
+                if not video_id:
+                    continue
+                published_at = snippet.get("publishedAt")
+                try:
+                    ts = datetime.datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+                        tzinfo=datetime.timezone.utc
+                    ).timestamp()
+                except (TypeError, ValueError):
+                    ts = 0
+                thumbnails = snippet.get("thumbnails", {})
+                thumb = (thumbnails.get("medium") or thumbnails.get("default") or {}).get("url")
+                local_results.append({
+                    "title": snippet.get("title", "Untitled"),
+                    "url": f"https://youtube.com/watch?v={video_id}",
+                    "source": "YouTube",
+                    "thumbnail": thumb,
+                    "summary": "YouTube Video",
+                    "saved": False,
+                    "timestamp": ts,
+                    "date_str": datetime.datetime.fromtimestamp(ts).strftime("%b %d, %Y") if ts else "Recently",
+                })
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as e:
+        logger.warning("YouTube Data API search failed for %r: %s", keyword, e)
+    return local_results
+
+# Simple process-local TTL cache so repeated /discover calls (page reloads,
+# polling) don't re-scrape every source on every request.
+_discover_cache = {"key": None, "expires_at": 0, "results": None}
+_DISCOVER_CACHE_TTL_SECONDS = 300
+
+def live_discover(db, force_refresh: bool = False):
     import concurrent.futures
     from models import Settings
 
     settings = db.query(Settings).first()
     keywords_str = settings.keywords if settings else "SRE, DevOps"
     custom_feeds_str = settings.custom_feeds if settings else "https://devops.com/feed/,\nhttps://thenewstack.io/feed/"
+    youtube_api_key = settings.youtube_api_key if settings else None
     keywords = [kw.strip() for kw in keywords_str.split(",") if kw.strip()]
     general_feeds = [f.strip() for f in custom_feeds_str.split(",") if f.strip()]
+
+    cache_key = (keywords_str, custom_feeds_str, bool(youtube_api_key))
+    now_ts = time.time()
+    if not force_refresh and _discover_cache["key"] == cache_key and _discover_cache["expires_at"] > now_ts:
+        return _discover_cache["results"]
 
     results = []
 
@@ -175,7 +253,7 @@ def live_discover(db):
         try:
             feed_url = f"https://medium.com/feed/tag/{keyword.lower().replace(' ', '-')}"
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:25]: 
+            for entry in feed.entries[:60]:
                 url = entry.link
                 if url:
                     ts = get_rss_timestamp(entry)
@@ -183,48 +261,66 @@ def live_discover(db):
                         "title": entry.title,
                         "url": url,
                         "source": "Medium",
+                        "keyword": keyword,
                         "summary": clean_html(entry.get('summary', '')),
                         "saved": False,
                         "timestamp": ts,
                         "date_str": datetime.datetime.fromtimestamp(ts).strftime("%b %d, %Y")
                     })
-        except: pass
+        except Exception as e:
+            logger.warning("Medium fetch failed for %r: %s", keyword, e)
         return local_results
 
     def fetch_youtube(keyword):
-        local_results = []
         two_years_ago = time.time() - (2 * 365 * 24 * 3600)
+
+        if youtube_api_key:
+            api_results = fetch_youtube_via_api(keyword, youtube_api_key, two_years_ago)
+            for r in api_results:
+                r["keyword"] = keyword
+            return api_results
+
+        local_results = []
         try:
             # Search multiple variations to get more videos
-            variations = [f"{keyword} tutorial", f"{keyword} crash course", f"{keyword} explained"]
-            for var in variations:
-                yt_results = SortedYoutubeSearch(var, max_results=20).to_dict()
+            variations = [
+                f"{keyword} tutorial", f"{keyword} crash course", f"{keyword} explained",
+                f"{keyword} full course", f"{keyword} deep dive", keyword,
+            ]
+            for i, var in enumerate(variations):
+                if i > 0:
+                    # Small courtesy jitter between successive scrape requests
+                    # for the same keyword, to avoid bursting YouTube.
+                    time.sleep(random.uniform(0.5, 1.5))
+                yt_results = SortedYoutubeSearch(var, max_results=40).to_dict()
                 for yt in yt_results:
                     yt_url = f"https://youtube.com{yt['url_suffix']}"
                     if any(r['url'] == yt_url for r in local_results):
                         continue
                     ts = parse_yt_time(yt.get('publish_time'))
-                    # Filter out videos older than 2 years
+                    # Filter out videos older than 2 years (and unparseable dates, ts == 0)
                     if ts < two_years_ago:
                         continue
                     local_results.append({
                         "title": yt['title'],
                         "url": yt_url,
                         "source": "YouTube",
+                        "keyword": keyword,
                         "thumbnail": yt.get('thumbnails', [])[0] if yt.get('thumbnails') else None,
                         "summary": "YouTube Video",
                         "saved": False,
                         "timestamp": ts,
                         "date_str": yt.get('publish_time', 'Recently')
                     })
-        except: pass
+        except Exception as e:
+            logger.warning("YouTube scrape failed for %r: %s", keyword, e)
         return local_results
 
     def fetch_custom(g_feed):
         local_results = []
         try:
             feed = feedparser.parse(g_feed)
-            for entry in feed.entries[:20]:
+            for entry in feed.entries[:60]:
                 ts = get_rss_timestamp(entry)
                 domain_match = re.search(r'https?://(?:www\.)?([^/]+)', g_feed)
                 source_name = domain_match.group(1) if domain_match else "Custom RSS"
@@ -232,13 +328,15 @@ def live_discover(db):
                     "title": entry.title,
                     "url": entry.link,
                     "source": source_name,
+                    "keyword": source_name,
                     "thumbnail": None,
                     "summary": clean_html(entry.get('summary', '')),
                     "saved": False,
                     "timestamp": ts,
                     "date_str": datetime.datetime.fromtimestamp(ts).strftime("%b %d, %Y")
                 })
-        except: pass
+        except Exception as e:
+            logger.warning("Custom feed fetch failed for %r: %s", g_feed, e)
         return local_results
 
     try:
@@ -249,15 +347,89 @@ def live_discover(db):
                 futures.append(executor.submit(fetch_youtube, keyword))
             for g_feed in general_feeds:
                 futures.append(executor.submit(fetch_custom, g_feed))
-            
+
             for future in concurrent.futures.as_completed(futures):
                 try:
                     res = future.result()
                     if res: results.extend(res)
-                except: pass
+                except Exception as e:
+                    logger.warning("Discover task failed: %s", e)
     except Exception as e:
-        print("Discover error", e)
-    
+        logger.error("Discover error: %s", e)
+
+    # De-dupe across keywords/sources (the same video/article can surface
+    # under multiple search terms) before sorting.
+    seen_urls = set()
+    deduped = []
+    for item in results:
+        if item["url"] in seen_urls:
+            continue
+        seen_urls.add(item["url"])
+        deduped.append(item)
+
     # Sort results from newest to oldest
-    results.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-    return results
+    deduped.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+
+    _discover_cache["key"] = cache_key
+    _discover_cache["expires_at"] = time.time() + _DISCOVER_CACHE_TTL_SECONDS
+    _discover_cache["results"] = deduped
+
+    return deduped
+
+def _extract_cve_severity(cve_item: dict) -> str:
+    metrics = cve_item.get("metrics", {})
+    for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        entries = metrics.get(key)
+        if entries:
+            data = entries[0].get("cvssData", {})
+            severity = data.get("baseSeverity") or entries[0].get("baseSeverity")
+            if severity:
+                return severity
+    return "UNKNOWN"
+
+def fetch_and_store_cves(db, keywords, days_back: int = 14, results_per_keyword: int = 10):
+    """Pulls recently-published CVEs matching the configured keywords from
+    the NVD Data API v2.0 (no API key required, rate-limited to ~5 req/30s)
+    and upserts them into the `cves` table."""
+    from models import CVE
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start = now - datetime.timedelta(days=days_back)
+    added = 0
+
+    for keyword in keywords:
+        try:
+            resp = requests.get(
+                "https://services.nvd.nist.gov/rest/json/cves/2.0",
+                params={
+                    "keywordSearch": keyword,
+                    "pubStartDate": start.strftime("%Y-%m-%dT%H:%M:%S.000"),
+                    "pubEndDate": now.strftime("%Y-%m-%dT%H:%M:%S.000"),
+                    "resultsPerPage": results_per_keyword,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            for wrapper in resp.json().get("vulnerabilities", []):
+                cve_item = wrapper.get("cve", {})
+                cve_id = cve_item.get("id")
+                if not cve_id:
+                    continue
+                if db.query(CVE).filter(CVE.cve_id == cve_id).first():
+                    continue
+                descriptions = cve_item.get("descriptions", [])
+                description = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")
+                db.add(CVE(
+                    cve_id=cve_id,
+                    description=description,
+                    severity=_extract_cve_severity(cve_item),
+                    status="new",
+                ))
+                added += 1
+            db.commit()
+            # Stay well under NVD's ~5 requests / 30s unauthenticated rate limit.
+            time.sleep(6)
+        except Exception as e:
+            logger.warning("CVE fetch failed for %r: %s", keyword, e)
+
+    return added

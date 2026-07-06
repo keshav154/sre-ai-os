@@ -1,6 +1,9 @@
+import time
+import requests
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional
 from database import engine, Base, get_db
@@ -10,6 +13,38 @@ from agents import research_agent, runbook_agent
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# create_all() only creates missing tables — it won't add new columns to an
+# already-existing table (e.g. the production Supabase/Postgres DB on
+# Render), so patch older DBs in place.
+def _add_missing_columns(table: str, new_columns: dict):
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as conn:
+            existing_cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+            for col, col_type in new_columns.items():
+                if col not in existing_cols:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
+            conn.commit()
+    else:
+        # Postgres (Supabase) — IF NOT EXISTS makes this idempotent and safe
+        # even if multiple Render instances boot concurrently and race on this DDL.
+        with engine.connect() as conn:
+            for col, col_type in new_columns.items():
+                conn.execute(text(
+                    f'ALTER TABLE public.{table} ADD COLUMN IF NOT EXISTS {col} {col_type}'
+                ))
+            conn.commit()
+
+_add_missing_columns("settings", {
+    "youtube_api_key": "VARCHAR",
+    "webhook_url": "VARCHAR",
+    "last_digest_at": "FLOAT",
+    "nvidia_nim_key": "VARCHAR",
+})
+_add_missing_columns("articles", {
+    "liked": "BOOLEAN DEFAULT FALSE",
+    "notes": "TEXT",
+})
 
 app = FastAPI(title="SRE AI OS API")
 
@@ -33,10 +68,19 @@ def read_root():
     return {"message": "Welcome to SRE AI OS Backend"}
 
 @app.get("/articles")
-def get_articles(db: Session = Depends(get_db)):
-    # Fetch the latest 20 learning items
-    articles = db.query(models.Article).order_by(models.Article.created_at.desc()).limit(20).all()
-    return articles
+def get_articles(q: Optional[str] = None, limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
+    # `limit` is capped (not unbounded) to keep a single request from pulling
+    # the whole table, but 100 replaces the old hardcoded 20.
+    limit = max(1, min(limit, 500))
+    query = db.query(models.Article)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            models.Article.title.ilike(like)
+            | models.Article.summary.ilike(like)
+            | models.Article.content.ilike(like)
+        )
+    return query.order_by(models.Article.created_at.desc()).offset(offset).limit(limit).all()
 
 @app.post("/ingest")
 def trigger_ingest(req: UrlRequest, db: Session = Depends(get_db)):
@@ -44,10 +88,50 @@ def trigger_ingest(req: UrlRequest, db: Session = Depends(get_db)):
     return {"message": "Content successfully ingested and summarized.", "data": result}
 
 @app.get("/discover")
-def discover(db: Session = Depends(get_db)):
+def discover(force: bool = False, db: Session = Depends(get_db)):
     from collector import live_discover
-    results = live_discover(db)
+    results = live_discover(db, force_refresh=force)
     return results
+
+@app.post("/digest/run")
+def run_digest(max_items: int = 15, db: Session = Depends(get_db)):
+    """Posts a "what's new" digest to Settings.webhook_url (Slack/Discord
+    incoming-webhook compatible). Intended to be hit by an external
+    scheduler (e.g. a Render Cron Job) rather than called from the UI."""
+    import datetime as _dt
+    from collector import live_discover
+
+    settings = db.query(models.Settings).first()
+    webhook_url = settings.webhook_url if settings else None
+    if not webhook_url:
+        raise HTTPException(status_code=400, detail="No webhook_url configured in Settings.")
+
+    results = live_discover(db)
+    since = settings.last_digest_at or 0
+    new_items = [r for r in results if r.get("timestamp", 0) > since][:max_items]
+
+    if not new_items:
+        settings.last_digest_at = time.time()
+        db.commit()
+        return {"status": "no_new_items", "sent": False}
+
+    # Plain "title — url" pairs render correctly on both Slack ("text") and
+    # Discord ("content") without relying on either platform's own markup
+    # dialect, which aren't compatible with each other.
+    lines = [f"SRE AI OS — {len(new_items)} new item(s) discovered:"]
+    for item in new_items:
+        lines.append(f"- {item['title']} (via {item.get('keyword', item['source'])})\n  {item['url']}")
+    message = "\n".join(lines)
+
+    try:
+        resp = requests.post(webhook_url, json={"text": message, "content": message}, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to post to webhook: {e}")
+
+    settings.last_digest_at = time.time()
+    db.commit()
+    return {"status": "sent", "sent": True, "item_count": len(new_items)}
 
 class SettingsUpdate(BaseModel):
     keywords: str
@@ -57,6 +141,9 @@ class SettingsUpdate(BaseModel):
     openai_key: Optional[str] = None
     anthropic_key: Optional[str] = None
     gemini_key: Optional[str] = None
+    nvidia_nim_key: Optional[str] = None
+    youtube_api_key: Optional[str] = None
+    webhook_url: Optional[str] = None
     custom_feeds: Optional[str] = None
     obsidian_vault_path: Optional[str] = None
     github_repo: Optional[str] = None
@@ -67,8 +154,8 @@ def get_settings(db: Session = Depends(get_db)):
     settings = db.query(models.Settings).first()
     if not settings:
         settings = models.Settings(
-            keywords="SRE, DevOps", 
-            llm_engine="ollama", 
+            keywords="SRE, DevOps",
+            llm_engine="ollama",
             ollama_model="llama3:latest",
             custom_feeds="https://devops.com/feed/,\nhttps://thenewstack.io/feed/,\nhttps://www.infoq.com/devops/news/rss/,\nhttps://aws.amazon.com/blogs/devops/feed/,\nhttps://netflixtechblog.com/feed,\nhttps://blog.cloudflare.com/rss/,\nhttps://kubernetes.io/feed.xml"
         )
@@ -82,6 +169,9 @@ def get_settings(db: Session = Depends(get_db)):
         "openai_key": settings.openai_key,
         "anthropic_key": settings.anthropic_key,
         "gemini_key": settings.gemini_key,
+        "nvidia_nim_key": settings.nvidia_nim_key,
+        "youtube_api_key": settings.youtube_api_key,
+        "webhook_url": settings.webhook_url,
         "custom_feeds": settings.custom_feeds,
         "obsidian_vault_path": settings.obsidian_vault_path,
         "github_repo": settings.github_repo,
@@ -100,6 +190,9 @@ def update_settings(req: SettingsUpdate, db: Session = Depends(get_db)):
             openai_key=req.openai_key,
             anthropic_key=req.anthropic_key,
             gemini_key=req.gemini_key,
+            nvidia_nim_key=req.nvidia_nim_key,
+            youtube_api_key=req.youtube_api_key,
+            webhook_url=req.webhook_url,
             custom_feeds=req.custom_feeds
         )
         db.add(settings)
@@ -111,6 +204,11 @@ def update_settings(req: SettingsUpdate, db: Session = Depends(get_db)):
         settings.openai_key = req.openai_key
         settings.anthropic_key = req.anthropic_key
         settings.gemini_key = req.gemini_key
+        settings.nvidia_nim_key = req.nvidia_nim_key
+        if req.youtube_api_key is not None:
+            settings.youtube_api_key = req.youtube_api_key
+        if req.webhook_url is not None:
+            settings.webhook_url = req.webhook_url
         if req.custom_feeds is not None:
             settings.custom_feeds = req.custom_feeds
         if req.obsidian_vault_path is not None:
@@ -124,23 +222,16 @@ def update_settings(req: SettingsUpdate, db: Session = Depends(get_db)):
 
 @app.post("/summarize")
 def summarize_article(req: UrlRequest, db: Session = Depends(get_db)):
-    from llm_client import llm
-    
+    from llm_client import llm, resolve_llm_config
+
     # Check if article already exists
     article = db.query(models.Article).filter(models.Article.url == req.url).first()
-    
+
     if article:
         # If it already exists, generate a new summary for it
         settings = db.query(models.Settings).first()
-        llm_engine = settings.llm_engine if settings else "ollama"
-        ollama_model = settings.ollama_model if settings else "llama3:latest"
-        api_key = None
-        if settings:
-            if llm_engine == "openrouter": api_key = settings.openrouter_key
-            elif llm_engine == "openai": api_key = settings.openai_key
-            elif llm_engine == "anthropic": api_key = settings.anthropic_key
-            elif llm_engine == "gemini": api_key = settings.gemini_key
-            
+        llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+
         prompt = f"You are an SRE AI. Summarize the following content in detail, extracting the most important key learning points for an SRE/DevOps engineer. Here is the content:\n\n{article.content[:15000]}"
         summary = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
         
@@ -154,24 +245,79 @@ def summarize_article(req: UrlRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail=res["error"])
         return res
 
-@app.post("/save-to-vault")
-def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
+def _write_note_to_vault(db: Session, article: "models.Article", section_title: str, body_text: str):
+    """Shared by /save-to-vault and /like: builds the markdown note and
+    writes it either to a local Obsidian vault or a GitHub repo, depending
+    on Settings. Raises HTTPException on misconfiguration or write failure."""
     import datetime, os
-    
-    # Get vault path from DB settings
+
     settings = db.query(models.Settings).first()
     vault_path = settings.obsidian_vault_path if settings and settings.obsidian_vault_path else None
     github_repo = settings.github_repo if settings and settings.github_repo else None
     github_token = settings.github_token if settings and settings.github_token else None
-    
+
     use_github = bool(github_repo and github_token)
-    
+
     if not use_github:
         if not vault_path:
             raise HTTPException(status_code=400, detail="Obsidian vault path is not configured. Please set it or configure GitHub Sync in Settings.")
         if not os.path.isdir(vault_path):
             raise HTTPException(status_code=400, detail=f"Obsidian vault path does not exist: {vault_path}")
 
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    safe_title = "".join(c for c in article.title if c.isalnum() or c in " -_").strip()
+
+    note_content = f"""---
+title: "{article.title}"
+source: {article.source}
+url: {article.url}
+date_saved: {now}
+tags: [sre, ai-os]
+---
+
+# {article.title}
+
+> **Source:** [{article.source}]({article.url})
+> **Saved:** {now}
+
+## {section_title}
+
+{body_text}
+
+---
+*Saved by SRE AI OS*
+"""
+    try:
+        if use_github:
+            from github import Github
+            g = Github(github_token)
+            repo = g.get_repo(github_repo)
+            file_path = f"SRE-AI-OS/{safe_title[:80]}.md"
+
+            try:
+                # Try to get file first to see if it exists (for update)
+                contents = repo.get_contents(file_path)
+                repo.update_file(contents.path, f"Update {safe_title}", note_content, contents.sha)
+            except Exception:
+                # If it doesn't exist, create it (404)
+                repo.create_file(file_path, f"Add {safe_title}", note_content)
+        else:
+            # Create Knowledge folder inside vault locally
+            knowledge_dir = os.path.join(vault_path, "SRE-AI-OS")
+            os.makedirs(knowledge_dir, exist_ok=True)
+
+            file_path = os.path.join(knowledge_dir, f"{safe_title[:80]}.md")
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(note_content)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write to Obsidian vault: {str(e)}")
+
+    return file_path
+
+@app.post("/save-to-vault")
+def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
     # Ingest first if not already in DB
     article = db.query(models.Article).filter(models.Article.url == req.url).first()
     if not article:
@@ -182,71 +328,84 @@ def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
 
     if not article:
         raise HTTPException(status_code=400, detail="Could not fetch article content.")
-    
+
     if article.saved_to_obsidian:
         return {"message": "Already saved to vault.", "status": "already_saved"}
 
-    # Write to Obsidian vault
+    summary_text = article.summary if article.summary and "Pending" not in article.summary else "Not yet summarized."
+    file_path = _write_note_to_vault(db, article, "AI Summary & Key Learnings", summary_text)
+
+    article.saved_to_obsidian = True
+    db.commit()
+    return {"message": f"Saved to Obsidian vault at {file_path}", "status": "saved", "path": file_path}
+
+@app.post("/like")
+def like_item(req: UrlRequest, db: Session = Depends(get_db)):
+    """Marks a post/video as liked and generates richer, personal-note-style
+    AI notes for it (key takeaways, quotes, action items) — distinct from
+    the generic executive `summary` — then saves them to the vault if one
+    is configured."""
+    from llm_client import llm, resolve_llm_config
+
+    article = db.query(models.Article).filter(models.Article.url == req.url).first()
+    if not article:
+        result = ingest_url(req.url, db, summarize=False)
+        if "error" in result and result.get("status") == "blocked":
+            raise HTTPException(status_code=400, detail=result["error"])
+        article = db.query(models.Article).filter(models.Article.url == req.url).first()
+
+    if not article:
+        raise HTTPException(status_code=400, detail="Could not fetch content to like.")
+
+    settings = db.query(models.Settings).first()
+    llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+
+    prompt = f"""You are an SRE AI assistant taking personal notes on behalf of the user, who just liked this {article.source} item titled "{article.title}".
+Write structured personal notes in Markdown with these sections:
+## Key Takeaways
+(3-6 bullet points of the most important ideas)
+## Notable Quotes / Highlights
+(direct quotes or standout moments, if any are identifiable)
+## Action Items
+(concrete things an SRE/DevOps engineer could try or investigate based on this)
+
+Base your notes only on the following content:
+
+{article.content[:15000]}"""
+    notes = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+
+    article.liked = True
+    article.notes = notes
+    db.commit()
+
+    saved_to_vault = False
     try:
-        # Build rich markdown note
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        safe_title = "".join(c for c in article.title if c.isalnum() or c in " -_").strip()
-        summary_text = article.summary if article.summary and "Pending" not in article.summary else "Not yet summarized."
-        
-        note_content = f"""---
-title: "{article.title}"
-source: {article.source}
-url: {article.url}
-date_saved: {now}
-tags: [sre, ai-os]
----
-
-# {article.title}
-
-> **Source:** [{article.source}]({article.url})  
-> **Saved:** {now}
-
-## AI Summary & Key Learnings
-
-{summary_text}
-
----
-*Saved by SRE AI OS*
-"""
-        if use_github:
-            from github import Github
-            g = Github(github_token)
-            repo = g.get_repo(github_repo)
-            file_path = f"SRE-AI-OS/{safe_title[:80]}.md"
-            
-            try:
-                # Try to get file first to see if it exists (for update)
-                contents = repo.get_contents(file_path)
-                repo.update_file(contents.path, f"Update {safe_title}", note_content, contents.sha)
-            except Exception as e:
-                # If it doesn't exist, create it (404)
-                repo.create_file(file_path, f"Add {safe_title}", note_content)
-                
-        else:
-            # Create Knowledge folder inside vault locally
-            knowledge_dir = os.path.join(vault_path, "SRE-AI-OS")
-            os.makedirs(knowledge_dir, exist_ok=True)
-            
-            file_path = os.path.join(knowledge_dir, f"{safe_title[:80]}.md")
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(note_content)
-        
+        _write_note_to_vault(db, article, "AI Notes (Liked)", notes)
         article.saved_to_obsidian = True
         db.commit()
-        return {"message": f"Saved to Obsidian vault at {file_path}", "status": "saved", "path": file_path}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to write to Obsidian vault: {str(e)}")
+        saved_to_vault = True
+    except HTTPException:
+        # Vault not configured or unreachable — the notes are still saved in
+        # the DB (visible in the app), just not persisted to a vault file.
+        pass
 
-@app.post("/collect")
-def trigger_collection(background_tasks: BackgroundTasks):
-    from collector import collect_mock_news
-    background_tasks.add_task(collect_mock_news)
-    return {"message": "Collection task started in the background."}
+    return {"title": article.title, "notes": notes, "liked": True, "saved_to_vault": saved_to_vault}
+
+@app.get("/cves")
+def get_cves(limit: int = 50, db: Session = Depends(get_db)):
+    limit = max(1, min(limit, 200))
+    cves = db.query(models.CVE).order_by(models.CVE.created_at.desc()).limit(limit).all()
+    return cves
+
+@app.post("/cves/refresh")
+def refresh_cves(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    from collector import fetch_and_store_cves
+    settings = db.query(models.Settings).first()
+    keywords = [k.strip() for k in (settings.keywords if settings else "SRE, DevOps").split(",") if k.strip()]
+    # NVD is rate-limited (~5 req/30s) so this can take a while for several
+    # keywords — run it in the background rather than blocking the request.
+    background_tasks.add_task(fetch_and_store_cves, db, keywords)
+    return {"message": f"CVE refresh started for {len(keywords)} keyword(s) in the background."}
 
 @app.post("/agent/research")
 def run_research_agent(req: PromptRequest):
@@ -336,17 +495,10 @@ def create_goal(req: GoalCreate, db: Session = Depends(get_db)):
 # NOTE: /goals/ai-generate must come BEFORE /goals/{goal_id} to avoid FastAPI matching 'ai-generate' as an integer
 @app.post("/goals/ai-generate")
 def generate_goal_path(req: GenerateGoalRequest, db: Session = Depends(get_db)):
-    from llm_client import llm
+    from llm_client import llm, resolve_llm_config
     import json, re as _re
     settings = db.query(models.Settings).first()
-    llm_engine = settings.llm_engine if settings else "ollama"
-    ollama_model = settings.ollama_model if settings else "llama3:latest"
-    api_key = None
-    if settings:
-        if llm_engine == "openrouter": api_key = settings.openrouter_key
-        elif llm_engine == "openai": api_key = settings.openai_key
-        elif llm_engine == "anthropic": api_key = settings.anthropic_key
-        elif llm_engine == "gemini": api_key = settings.gemini_key
+    llm_engine, ollama_model, api_key = resolve_llm_config(settings)
 
     prompt = f"""You are an expert SRE career coach. Generate a structured learning roadmap for: "{req.topic}".
 Return ONLY valid JSON, no markdown, no extra text:

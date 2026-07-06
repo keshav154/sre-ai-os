@@ -10,6 +10,9 @@ export default function Settings() {
   const [openaiKey, setOpenaiKey] = useState("")
   const [anthropicKey, setAnthropicKey] = useState("")
   const [geminiKey, setGeminiKey] = useState("")
+  const [nvidiaNimKey, setNvidiaNimKey] = useState("")
+  const [youtubeApiKey, setYoutubeApiKey] = useState("")
+  const [webhookUrl, setWebhookUrl] = useState("")
   const [customFeeds, setCustomFeeds] = useState("https://devops.com/feed/,\nhttps://thenewstack.io/feed/,\nhttps://www.infoq.com/devops/news/rss/,\nhttps://aws.amazon.com/blogs/devops/feed/,\nhttps://netflixtechblog.com/feed,\nhttps://blog.cloudflare.com/rss/,\nhttps://kubernetes.io/feed.xml")
   const [obsidianVaultPath, setObsidianVaultPath] = useState("")
   const [githubRepo, setGithubRepo] = useState("")
@@ -17,6 +20,8 @@ export default function Settings() {
 
   const [saving, setSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [testingDigest, setTestingDigest] = useState(false)
+  const [digestResult, setDigestResult] = useState('')
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -31,6 +36,9 @@ export default function Settings() {
         setOpenaiKey(d.openai_key || "")
         setAnthropicKey(d.anthropic_key || "")
         setGeminiKey(d.gemini_key || "")
+        setNvidiaNimKey(d.nvidia_nim_key || "")
+        setYoutubeApiKey(d.youtube_api_key || "")
+        setWebhookUrl(d.webhook_url || "")
         setCustomFeeds(d.custom_feeds || "https://devops.com/feed/,\nhttps://thenewstack.io/feed/,\nhttps://www.infoq.com/devops/news/rss/,\nhttps://aws.amazon.com/blogs/devops/feed/,\nhttps://netflixtechblog.com/feed,\nhttps://blog.cloudflare.com/rss/,\nhttps://kubernetes.io/feed.xml")
         setObsidianVaultPath(d.obsidian_vault_path || "")
         setGithubRepo(d.github_repo || "")
@@ -54,6 +62,9 @@ export default function Settings() {
           openai_key: openaiKey,
           anthropic_key: anthropicKey,
           gemini_key: geminiKey,
+          nvidia_nim_key: nvidiaNimKey,
+          youtube_api_key: youtubeApiKey,
+          webhook_url: webhookUrl,
           custom_feeds: customFeeds,
           obsidian_vault_path: obsidianVaultPath,
           github_repo: githubRepo,
@@ -67,6 +78,27 @@ export default function Settings() {
       setSaveStatus('error')
     }
     setSaving(false)
+  }
+
+  const handleTestDigest = async () => {
+    setTestingDigest(true)
+    setDigestResult('')
+    try {
+      // Persist the webhook URL first so the backend has it before we trigger a run.
+      await handleSave()
+      const res = await fetch(`${API}/digest/run`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        setDigestResult(`Failed: ${data.detail || 'unknown error'}`)
+      } else if (data.status === 'no_new_items') {
+        setDigestResult('No new items since the last digest — nothing sent.')
+      } else {
+        setDigestResult(`Sent! ${data.item_count} item(s) posted to your webhook.`)
+      }
+    } catch (e) {
+      setDigestResult('Failed to reach backend.')
+    }
+    setTestingDigest(false)
   }
 
   return (
@@ -90,10 +122,23 @@ export default function Settings() {
 
           <h2 className="text-xl font-bold mb-4">Custom RSS Feeds</h2>
           <p className="text-sm text-zinc-400 mb-4">Comma-separated list of exact RSS Feed URLs to parse.</p>
-          <textarea 
+          <textarea
             value={customFeeds}
             onChange={(e) => setCustomFeeds(e.target.value)}
             className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 min-h-[120px] mb-4 font-mono text-sm"
+          />
+
+          <h2 className="text-xl font-bold mb-2">YouTube Data API Key (optional)</h2>
+          <p className="text-sm text-zinc-400 mb-4">
+            Without this, YouTube results come from scraping search pages and dates are approximate.
+            Add a free <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="text-emerald-400 underline">YouTube Data API v3 key</a> for exact publish dates and more reliable "newest first" sorting.
+          </p>
+          <input
+            type="password"
+            value={youtubeApiKey}
+            onChange={(e) => setYoutubeApiKey(e.target.value)}
+            placeholder="AIzaSy..."
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"
           />
         </section>
 
@@ -113,18 +158,19 @@ export default function Settings() {
               <option value="anthropic">Anthropic (Claude 3.5)</option>
               <option value="gemini">Google Gemini</option>
               <option value="openrouter">OpenRouter</option>
+              <option value="nvidia_nim">NVIDIA NIM</option>
             </select>
           </div>
 
           <div className="mb-4">
             <label className="block text-sm font-semibold mb-2">Model Name</label>
-            <input 
+            <input
               type="text"
               value={ollamaModel}
               onChange={(e) => setOllamaModel(e.target.value)}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
-            <p className="text-xs text-zinc-500 mt-2">Examples: llama3:latest (Ollama), meta-llama/llama-3-8b-instruct:free (OpenRouter), gpt-4o (OpenAI)</p>
+            <p className="text-xs text-zinc-500 mt-2">Examples: llama3:latest (Ollama), meta-llama/llama-3-8b-instruct:free (OpenRouter), gpt-4o (OpenAI), meta/llama-3.1-8b-instruct (NVIDIA NIM)</p>
 
             {llmEngine === 'openai' && (
               <>
@@ -175,6 +221,22 @@ export default function Settings() {
                   placeholder="AIzaSy..."
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                 />
+              </>
+            )}
+
+            {llmEngine === 'nvidia_nim' && (
+              <>
+                <label className="block text-sm font-semibold mb-2">NVIDIA NIM API Key</label>
+                <input
+                  type="password"
+                  value={nvidiaNimKey}
+                  onChange={(e) => setNvidiaNimKey(e.target.value)}
+                  placeholder="nvapi-..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                />
+                <p className="text-xs text-zinc-500 mt-2">
+                  Get a free key at <a href="https://build.nvidia.com" target="_blank" rel="noreferrer" className="text-emerald-400 underline">build.nvidia.com</a>. Browse available model names in their catalog — the Model Name field above must match exactly (e.g. <code className="bg-zinc-800 px-1 rounded">meta/llama-3.1-8b-instruct</code>).
+                </p>
               </>
             )}
           </div>
@@ -240,6 +302,35 @@ export default function Settings() {
           <p className="text-xs text-zinc-500">
             Ensure your token has "repo" scope (classic token) or "Contents" read/write (fine-grained token).
           </p>
+        </section>
+      </div>
+
+      {/* Digest Webhook Section */}
+      <div className="mt-8 max-w-5xl">
+        <section className="bg-zinc-900 border border-amber-900/40 rounded-xl p-6 shadow-xl">
+          <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+            <span className="text-amber-400 text-2xl">🔔</span> Discovery Digest (Slack / Discord)
+          </h2>
+          <p className="text-sm text-zinc-400 mb-4">
+            Paste a Slack or Discord incoming-webhook URL to get a "what's new" digest posted automatically.
+            Pair this with a scheduled call to <code className="text-amber-300 bg-zinc-800 px-1 rounded">POST /digest/run</code> (e.g. a Render Cron Job — see <code className="text-amber-300 bg-zinc-800 px-1 rounded">render.yaml</code>) to run it on a schedule.
+          </p>
+          <label className="block text-xs font-semibold mb-1 text-zinc-300">Webhook URL</label>
+          <input
+            type="password"
+            value={webhookUrl}
+            onChange={e => setWebhookUrl(e.target.value)}
+            placeholder="https://hooks.slack.com/services/... or https://discord.com/api/webhooks/..."
+            className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono text-sm mb-3"
+          />
+          <button
+            onClick={handleTestDigest}
+            disabled={testingDigest || !webhookUrl}
+            className="bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors cursor-pointer"
+          >
+            {testingDigest ? 'Sending...' : 'Send Digest Now'}
+          </button>
+          {digestResult && <p className="text-xs text-zinc-400 mt-2">{digestResult}</p>}
         </section>
       </div>
 

@@ -20,6 +20,13 @@ class LLMClient:
             api_key="ollama", # dummy key required by SDK
         ) if settings.ollama_base_url else None
 
+        # NVIDIA NIM (build.nvidia.com / integrate.api.nvidia.com) is also
+        # OpenAI SDK-compatible.
+        self.nvidia_nim_client = OpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=settings.nvidia_nim_api_key,
+        ) if settings.nvidia_nim_api_key else None
+
         self.anthropic_client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
         if settings.gemini_api_key:
             genai.configure(api_key=settings.gemini_api_key)
@@ -67,6 +74,18 @@ class LLMClient:
             except Exception as e:
                 return f"AI Summarization failed (OpenAI): {e}"
             
+        elif model_type == "nvidia_nim":
+            client = OpenAI(api_key=api_key, base_url="https://integrate.api.nvidia.com/v1", timeout=15, max_retries=0) if api_key else self.nvidia_nim_client
+            if not client: return "AI Summarization bypassed. Please add an NVIDIA_NIM_API_KEY to your settings."
+            try:
+                response = client.chat.completions.create(
+                    model=model_name or "meta/llama-3.1-8b-instruct",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                return f"AI Summarization failed (NVIDIA NIM): {e}"
+
         elif model_type == "anthropic":
             client = Anthropic(api_key=api_key) if api_key else self.anthropic_client
             if not client: return "AI Summarization bypassed. Please add an ANTHROPIC_API_KEY to your settings."
@@ -124,3 +143,23 @@ class LLMClient:
         return "AI Summarization bypassed. (Ensure you have Ollama running with 'llama3', or add an OPENROUTER_API_KEY to your .env file)."
 
 llm = LLMClient()
+
+# Shared "which engine + model + key" lookup used by every endpoint that
+# calls llm.generate() on behalf of the user's configured Settings, so
+# adding a new provider only requires updating it in one place.
+_ENGINE_KEY_FIELDS = {
+    "openrouter": "openrouter_key",
+    "openai": "openai_key",
+    "anthropic": "anthropic_key",
+    "gemini": "gemini_key",
+    "nvidia_nim": "nvidia_nim_key",
+}
+
+def resolve_llm_config(settings):
+    llm_engine = settings.llm_engine if settings else "ollama"
+    ollama_model = settings.ollama_model if settings else "llama3:latest"
+    api_key = None
+    field = _ENGINE_KEY_FIELDS.get(llm_engine)
+    if settings and field:
+        api_key = getattr(settings, field, None)
+    return llm_engine, ollama_model, api_key

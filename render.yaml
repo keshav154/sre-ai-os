@@ -25,3 +25,19 @@ services:
           type: web
           name: sre-ai-os-backend
           envVarKey: RENDER_EXTERNAL_URL
+
+  # Daily digest — POSTs new discoveries to the Slack/Discord webhook
+  # configured in Settings. Requires a paid Render plan (Cron Jobs aren't
+  # available on the free tier). Adjust `schedule` (UTC) as needed.
+  - type: cron
+    name: sre-ai-os-digest
+    env: python
+    schedule: "0 13 * * *"
+    buildCommand: "true"
+    startCommand: "curl -sf -X POST \"$BACKEND_URL/digest/run\""
+    envVars:
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: sre-ai-os-backend
+          envVarKey: RENDER_EXTERNAL_URL

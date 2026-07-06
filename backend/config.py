@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     gemini_api_key: str | None = None
     openrouter_api_key: str | None = None
+    nvidia_nim_api_key: str | None = None
     ollama_base_url: str | None = "http://localhost:11434/v1"
     github_repo: str | None = None
     github_token: str | None = None

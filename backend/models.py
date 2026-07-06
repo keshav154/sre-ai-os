@@ -14,6 +14,8 @@ class Article(Base):
     actionability_score = Column(Float)
     category = Column(String)
     saved_to_obsidian = Column(Boolean, default=False)
+    liked = Column(Boolean, default=False)
+    notes = Column(Text, nullable=True)  # AI-generated personal notes for liked items (distinct from the generic `summary`)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Settings(Base):
@@ -29,7 +31,11 @@ class Settings(Base):
     openai_key = Column(String, nullable=True)
     anthropic_key = Column(String, nullable=True)
     gemini_key = Column(String, nullable=True)
+    nvidia_nim_key = Column(String, nullable=True)
+    youtube_api_key = Column(String, nullable=True)  # optional: enables precise dates via YouTube Data API v3
     custom_feeds = Column(String, default="https://devops.com/feed/,\nhttps://thenewstack.io/feed/,\nhttps://www.infoq.com/devops/news/rss/,\nhttps://aws.amazon.com/blogs/devops/feed/,\nhttps://netflixtechblog.com/feed,\nhttps://blog.cloudflare.com/rss/,\nhttps://kubernetes.io/feed.xml")
+    webhook_url = Column(String, nullable=True)  # Slack/Discord-compatible incoming webhook for the discovery digest
+    last_digest_at = Column(Float, nullable=True)  # unix timestamp of the last digest send, for incremental "what's new"
     obsidian_vault_path = Column(String, nullable=True)  # Absolute path to Obsidian vault
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
