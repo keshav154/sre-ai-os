@@ -7,6 +7,7 @@ requests
 beautifulsoup4
 feedparser
 youtube-transcript-api
+youtube-search
 openai
 anthropic
 google-generativeai
