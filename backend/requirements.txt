@@ -2,10 +2,14 @@ fastapi
 uvicorn
 sqlalchemy
 pydantic
+pydantic-settings
 requests
 beautifulsoup4
 feedparser
 youtube-transcript-api
 openai
+anthropic
+google-generativeai
+duckduckgo-search
 psycopg2-binary
 PyGithub
