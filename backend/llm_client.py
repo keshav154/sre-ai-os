@@ -1,8 +1,12 @@
 import os
+import logging
+import requests as _requests
 from openai import OpenAI
 from anthropic import Anthropic
 import google.generativeai as genai
 from config import settings
+
+logger = logging.getLogger("llm_client")
 
 class LLMClient:
     def __init__(self):
@@ -163,3 +167,52 @@ def resolve_llm_config(settings):
     if settings and field:
         api_key = getattr(settings, field, None)
     return llm_engine, ollama_model, api_key
+
+def embed_texts(texts: list, db_settings=None):
+    """Embeds a batch of strings for RAG-style retrieval. Tries OpenAI's
+    embedding API first (if a key is configured, either per-user in
+    Settings or via the OPENAI_API_KEY env var), then falls back to a local
+    Ollama model (requires `ollama pull nomic-embed-text`). Returns None if
+    neither is available — callers should degrade gracefully (e.g. skip
+    semantic search/clustering rather than failing outright)."""
+    if not texts:
+        return []
+
+    openai_key = (getattr(db_settings, "openai_key", None) if db_settings else None) or settings.openai_api_key
+    if openai_key:
+        try:
+            client = OpenAI(api_key=openai_key)
+            resp = client.embeddings.create(model="text-embedding-3-small", input=texts)
+            return [d.embedding for d in resp.data]
+        except Exception as e:
+            logger.warning("OpenAI embeddings failed, falling back: %s", e)
+
+    if settings.ollama_base_url:
+        try:
+            base = settings.ollama_base_url.rstrip("/")
+            if base.endswith("/v1"):
+                base = base[:-3]
+            out = []
+            for text in texts:
+                resp = _requests.post(
+                    f"{base}/api/embeddings",
+                    json={"model": "nomic-embed-text", "prompt": text[:8000]},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                out.append(resp.json()["embedding"])
+            return out
+        except Exception as e:
+            logger.warning("Ollama embeddings failed: %s", e)
+
+    return None
+
+def cosine_similarity(a: list, b: list) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)

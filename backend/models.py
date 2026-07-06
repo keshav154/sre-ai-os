@@ -16,6 +16,8 @@ class Article(Base):
     saved_to_obsidian = Column(Boolean, default=False)
     liked = Column(Boolean, default=False)
     notes = Column(Text, nullable=True)  # AI-generated personal notes for liked items (distinct from the generic `summary`)
+    embedding = Column(Text, nullable=True)  # JSON-encoded float vector for semantic search (RAG over the vault)
+    tags = Column(Text, nullable=True)  # JSON-encoded list of LLM-extracted concept tags, used to build the knowledge graph
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Settings(Base):
@@ -66,6 +68,20 @@ class LearningStep(Base):
     description = Column(Text, nullable=True)
     completed = Column(Boolean, default=False)
     order_index = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class QuizQuestion(Base):
+    __tablename__ = "quiz_questions"
+    id = Column(Integer, primary_key=True, index=True)
+    article_id = Column(Integer, index=True)
+    article_title = Column(String, nullable=True)
+    question = Column(Text)
+    answer = Column(Text)
+    # Simplified spaced-repetition schedule (SM-2-lite): interval doubles on
+    # a correct answer and resets to 1 day on a miss.
+    interval_days = Column(Integer, default=1)
+    review_count = Column(Integer, default=0)
+    next_review_at = Column(DateTime(timezone=True), server_default=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class TimeLog(Base):

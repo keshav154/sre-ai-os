@@ -1,6 +1,10 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
-import { Network, RefreshCw, Info } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { Network, RefreshCw, Info, MessageCircleQuestion, Send, Database } from 'lucide-react'
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 interface GraphNode {
   id: string
@@ -39,6 +43,50 @@ export default function KnowledgeGraph() {
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null)
   const animRef = useRef<number>(0)
   const positionsRef = useRef<Map<string, { x: number; y: number; vx: number; vy: number }>>(new Map())
+
+  const [question, setQuestion] = useState('')
+  const [asking, setAsking] = useState(false)
+  const [answer, setAnswer] = useState('')
+  const [sources, setSources] = useState<{ title: string; url: string }[]>([])
+  const [askStatus, setAskStatus] = useState('')
+  const [reindexing, setReindexing] = useState(false)
+
+  const handleAsk = async () => {
+    if (!question.trim()) return
+    setAsking(true)
+    setAskStatus('')
+    setAnswer('')
+    setSources([])
+    try {
+      const res = await fetch(`${API}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: question.trim() })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setAskStatus(data.detail || 'Failed to get an answer.')
+      } else {
+        setAnswer(data.answer)
+        setSources(data.sources || [])
+      }
+    } catch (e) {
+      setAskStatus('Failed to reach the backend.')
+    }
+    setAsking(false)
+  }
+
+  const handleReindex = async () => {
+    setReindexing(true)
+    try {
+      const res = await fetch(`${API}/vault/reindex`, { method: 'POST' })
+      const data = await res.json()
+      setAskStatus(data.message || 'Reindexing started.')
+    } catch (e) {
+      setAskStatus('Failed to start reindexing.')
+    }
+    setReindexing(false)
+  }
 
   const fetchGraph = async () => {
     setLoading(true)
@@ -305,6 +353,68 @@ export default function KnowledgeGraph() {
             <p className="font-bold text-white">{hoveredNode.label}</p>
             {hoveredNode.source && <p className="text-zinc-400">{hoveredNode.source}</p>}
             {hoveredNode.url && <p className="text-purple-400 mt-0.5">Click to open →</p>}
+          </div>
+        )}
+      </div>
+
+      {/* Ask Your Vault (RAG chat) */}
+      <div className="bg-zinc-900 border border-emerald-900/40 rounded-xl p-6">
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <MessageCircleQuestion className="text-emerald-400 w-6 h-6" /> Ask Your Vault
+          </h2>
+          <button
+            onClick={handleReindex}
+            disabled={reindexing}
+            title="Backfill embeddings for articles saved before semantic search existed"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-400 transition-colors cursor-pointer"
+          >
+            <Database className="w-3.5 h-3.5" /> {reindexing ? 'Starting...' : 'Reindex Vault'}
+          </button>
+        </div>
+        <p className="text-zinc-400 text-sm mb-4">
+          Ask a question across everything you've liked, summarized, or saved — answered using only your own notes, with citations.
+        </p>
+        <div className="flex gap-2 mb-4">
+          <input
+            type="text"
+            value={question}
+            onChange={e => setQuestion(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAsk()}
+            placeholder="e.g. What have I learned about Kubernetes RBAC?"
+            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+          <button
+            onClick={handleAsk}
+            disabled={asking || !question.trim()}
+            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-5 py-2.5 rounded-lg font-bold text-sm transition-colors cursor-pointer"
+          >
+            <Send className="w-4 h-4" /> {asking ? 'Thinking...' : 'Ask'}
+          </button>
+        </div>
+
+        {askStatus && <p className="text-xs text-zinc-500 mb-3">{askStatus}</p>}
+
+        {answer && (
+          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+            <div className="prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-headings:text-emerald-400 prose-a:text-blue-400">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
+            </div>
+            {sources.length > 0 && (
+              <div className="mt-4 pt-3 border-t border-zinc-800 flex flex-wrap gap-2">
+                {sources.map((s, i) => (
+                  <a
+                    key={i}
+                    href={s.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-emerald-400 transition-colors"
+                  >
+                    📄 {s.title}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -1,4 +1,5 @@
 import datetime
+import difflib
 import logging
 import random
 from models import Article
@@ -230,6 +231,57 @@ def fetch_youtube_via_api(keyword: str, api_key: str, two_years_ago: float, page
 _discover_cache = {"key": None, "expires_at": 0, "results": None}
 _DISCOVER_CACHE_TTL_SECONDS = 300
 
+_TITLE_JUNK = re.compile(
+    r'\s*[\|\-–—]\s*(by\s+.+|medium|jun|jul|aug|\d{4}).*$',
+    re.IGNORECASE,
+)
+_TITLE_STOPWORDS = {
+    'the', 'and', 'for', 'with', 'from', 'this', 'that', 'your', 'you', 'are',
+    'guide', 'complete', 'full', 'course', 'crash', 'tutorial', 'beginner',
+    'beginners', 'explained', 'introduction', 'certification', 'quick',
+}
+
+def _title_tokens(title: str) -> set:
+    # Strips common "| by Author | Jun, 2026 | Medium"-style suffixes, then
+    # tokenizes and drops generic words shared by unrelated templated
+    # titles (e.g. "X Certification in 2026: A Beginner's Guide to Y")
+    # so clustering keys on the *distinctive* subject matter, not boilerplate.
+    t = _TITLE_JUNK.sub('', title or '').lower()
+    words = re.findall(r'[a-z0-9]+', t)
+    return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS}
+
+def _cluster_near_duplicates(items: list, threshold: float = 0.5) -> list:
+    """The same story often appears as a Medium post AND several YouTube
+    videos. Rather than a costly embedding call per item, this uses cheap
+    token-set Jaccard similarity on normalized titles to greedily group
+    near-duplicates (more robust than raw character-sequence similarity,
+    which false-positives on shared templated phrasing like "X
+    Certification in 2026: A Guide to Y" across unrelated tools).
+    The newest item in each cluster stays visible with a `related` list of
+    the others attached; the rest are flagged `hidden_duplicate` so the
+    frontend can collapse them instead of showing 5 cards for one story."""
+    clusters = []  # list of (token_set, representative_item)
+    for item in items:  # items are already newest-first
+        tokens = _title_tokens(item.get('title', ''))
+        match = None
+        if len(tokens) >= 2:
+            for cluster_tokens, rep in clusters:
+                union = tokens | cluster_tokens
+                if not union:
+                    continue
+                jaccard = len(tokens & cluster_tokens) / len(union)
+                if jaccard >= threshold:
+                    match = rep
+                    break
+        if match is not None:
+            match.setdefault('related', []).append({
+                "title": item['title'], "url": item['url'], "source": item['source'],
+            })
+            item['hidden_duplicate'] = True
+        else:
+            clusters.append((tokens, item))
+    return items
+
 def live_discover(db, force_refresh: bool = False):
     import concurrent.futures
     from models import Settings
@@ -369,6 +421,9 @@ def live_discover(db, force_refresh: bool = False):
 
     # Sort results from newest to oldest
     deduped.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+
+    # Collapse near-duplicate coverage of the same story across sources.
+    deduped = _cluster_near_duplicates(deduped)
 
     _discover_cache["key"] = cache_key
     _discover_cache["expires_at"] = time.time() + _DISCOVER_CACHE_TTL_SECONDS

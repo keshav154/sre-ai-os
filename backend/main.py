@@ -1,4 +1,5 @@
 import time
+import datetime
 import requests
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,8 @@ _add_missing_columns("settings", {
 _add_missing_columns("articles", {
     "liked": "BOOLEAN DEFAULT FALSE",
     "notes": "TEXT",
+    "embedding": "TEXT",
+    "tags": "TEXT",
 })
 
 app = FastAPI(title="SRE AI OS API")
@@ -237,6 +240,8 @@ def summarize_article(req: UrlRequest, db: Session = Depends(get_db)):
         
         article.summary = summary
         db.commit()
+        _embed_article(article, settings, db)
+        _generate_tags(article, llm_engine, ollama_model, api_key, db)
         return {"title": article.title, "summary": summary, "status": "success"}
     else:
         # If it doesn't exist, ingest it and summarize
@@ -318,6 +323,7 @@ tags: [sre, ai-os]
 
 @app.post("/save-to-vault")
 def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
+    from llm_client import resolve_llm_config
     # Ingest first if not already in DB
     article = db.query(models.Article).filter(models.Article.url == req.url).first()
     if not article:
@@ -337,7 +343,127 @@ def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
 
     article.saved_to_obsidian = True
     db.commit()
+    save_settings = db.query(models.Settings).first()
+    if not article.embedding:
+        _embed_article(article, save_settings, db)
+    if not article.tags:
+        llm_engine, ollama_model, api_key = resolve_llm_config(save_settings)
+        _generate_tags(article, llm_engine, ollama_model, api_key, db)
     return {"message": f"Saved to Obsidian vault at {file_path}", "status": "saved", "path": file_path}
+
+def _embed_article(article: "models.Article", db_settings, db: Session):
+    """Computes and stores an embedding for an article so it's searchable
+    via /ask. Best-effort: silently no-ops if no embedding provider
+    (OpenAI key or local Ollama) is configured."""
+    import json
+    from llm_client import embed_texts
+
+    text_for_embedding = " ".join(filter(None, [
+        article.title,
+        article.notes,
+        article.summary if article.summary and "Pending" not in article.summary else None,
+        (article.content or "")[:4000],
+    ]))[:8000]
+
+    vectors = embed_texts([text_for_embedding], db_settings)
+    if vectors:
+        article.embedding = json.dumps(vectors[0])
+        db.commit()
+
+def _generate_tags(article: "models.Article", llm_engine, ollama_model, api_key, db: Session):
+    """Extracts 3-6 concept tags (e.g. "kubernetes", "rbac", "incident-response")
+    via the LLM, used to build /api/graph from real extracted concepts
+    instead of crude keyword-in-title substring matching. Best-effort."""
+    import json, re as _re
+    from llm_client import llm
+
+    text = " ".join(filter(None, [article.title, article.notes, article.summary, (article.content or "")[:2000]]))[:6000]
+    prompt = f"""Extract 3-6 short concept tags (lowercase, 1-3 words each, e.g. "kubernetes", "rbac", "incident response") that best describe the technical topics in the text below.
+Return ONLY a JSON array of strings, no markdown: ["tag1", "tag2", ...]
+
+Text:
+{text}"""
+    try:
+        raw = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+        match = _re.search(r'\[[\s\S]*\]', raw)
+        if not match:
+            return
+        tags = [str(t).strip().lower() for t in json.loads(match.group()) if str(t).strip()]
+        if tags:
+            article.tags = json.dumps(tags[:6])
+            db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("main").warning("Tag extraction failed for %r: %s", article.title, e)
+
+def _generate_quiz_questions(article: "models.Article", llm_engine, ollama_model, api_key, db: Session):
+    """Turns the AI notes on a liked item into 3-5 spaced-repetition recall
+    questions, stored in `quiz_questions`. Best-effort — a malformed LLM
+    response just means no quiz gets created for this item, which isn't
+    fatal to the /like flow."""
+    import json, re as _re
+    from llm_client import llm
+
+    prompt = f"""Based on these personal notes about "{article.title}", write 4 short active-recall quiz questions with concise answers, testing the key concepts (not trivia).
+Return ONLY valid JSON, no markdown: [{{"question": "...", "answer": "..."}}, ...]
+
+Notes:
+{(article.notes or '')[:6000]}"""
+    try:
+        raw = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+        match = _re.search(r'\[[\s\S]*\]', raw)
+        if not match:
+            return
+        items = json.loads(match.group())
+        for qa in items[:5]:
+            if not qa.get("question") or not qa.get("answer"):
+                continue
+            db.add(models.QuizQuestion(
+                article_id=article.id,
+                article_title=article.title,
+                question=qa["question"],
+                answer=qa["answer"],
+            ))
+        db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("main").warning("Quiz generation failed for %r: %s", article.title, e)
+
+@app.get("/quiz/due")
+def get_due_quiz(limit: int = 10, db: Session = Depends(get_db)):
+    limit = max(1, min(limit, 50))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    due = (
+        db.query(models.QuizQuestion)
+        .filter(models.QuizQuestion.next_review_at <= now)
+        .order_by(models.QuizQuestion.next_review_at.asc())
+        .limit(limit)
+        .all()
+    )
+    return due
+
+@app.get("/quiz/stats")
+def get_quiz_stats(db: Session = Depends(get_db)):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    total = db.query(models.QuizQuestion).count()
+    due = db.query(models.QuizQuestion).filter(models.QuizQuestion.next_review_at <= now).count()
+    return {"total": total, "due": due}
+
+class QuizAnswer(BaseModel):
+    correct: bool
+
+@app.post("/quiz/{question_id}/answer")
+def answer_quiz(question_id: int, req: QuizAnswer, db: Session = Depends(get_db)):
+    q = db.query(models.QuizQuestion).filter(models.QuizQuestion.id == question_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    # SM-2-lite: double the interval on a correct answer, reset to 1 day on a miss.
+    q.interval_days = min(q.interval_days * 2, 180) if req.correct else 1
+    q.review_count += 1
+    q.next_review_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=q.interval_days)
+    db.commit()
+    return {"next_review_in_days": q.interval_days}
 
 @app.post("/like")
 def like_item(req: UrlRequest, db: Session = Depends(get_db)):
@@ -377,6 +503,9 @@ Base your notes only on the following content:
     article.liked = True
     article.notes = notes
     db.commit()
+    _embed_article(article, settings, db)
+    _generate_tags(article, llm_engine, ollama_model, api_key, db)
+    _generate_quiz_questions(article, llm_engine, ollama_model, api_key, db)
 
     saved_to_vault = False
     try:
@@ -390,6 +519,103 @@ Base your notes only on the following content:
         pass
 
     return {"title": article.title, "notes": notes, "liked": True, "saved_to_vault": saved_to_vault}
+
+class AskRequest(BaseModel):
+    question: str
+    top_k: int = 5
+
+def _search_vault(query: str, settings, db: Session, top_k: int = 5):
+    """Shared semantic-search core for /ask and the grounded Research
+    Agent: embeds `query`, scores it against every article's stored
+    embedding via cosine similarity, and returns the top matches (empty
+    list if no embedding provider is configured or nothing scores > 0)."""
+    import json
+    from llm_client import embed_texts, cosine_similarity
+
+    articles = db.query(models.Article).filter(models.Article.embedding.isnot(None)).all()
+    if not articles:
+        return []
+
+    query_vec = embed_texts([query], settings)
+    if not query_vec:
+        return []
+    query_vec = query_vec[0]
+
+    scored = []
+    for a in articles:
+        try:
+            vec = json.loads(a.embedding)
+        except (TypeError, ValueError):
+            continue
+        scored.append((cosine_similarity(query_vec, vec), a))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [a for score, a in scored[:max(1, min(top_k, 20))] if score > 0]
+
+@app.post("/ask")
+def ask_vault(req: AskRequest, db: Session = Depends(get_db)):
+    """RAG over the saved vault: embeds the question, finds the most
+    semantically similar saved articles/notes, and asks the configured LLM
+    to answer using only that retrieved context, with citations."""
+    from llm_client import llm, resolve_llm_config
+
+    settings = db.query(models.Settings).first()
+    if not db.query(models.Article).filter(models.Article.embedding.isnot(None)).first():
+        raise HTTPException(status_code=400, detail="Your vault has no searchable notes yet. Like or summarize a few articles first (or run POST /vault/reindex to backfill existing ones).")
+
+    top = _search_vault(req.question, settings, db, top_k=req.top_k)
+    if not top:
+        raise HTTPException(status_code=404, detail="No relevant notes found in your vault for that question (or no embedding provider is configured).")
+
+    context_blocks = []
+    for a in top:
+        body = a.notes or a.summary or (a.content or "")[:2000]
+        context_blocks.append(f"### {a.title}\nSource: {a.url}\n{body[:2000]}")
+    context = "\n\n".join(context_blocks)
+
+    prompt = f"""You are the user's personal SRE knowledge-base assistant. Answer the question below using ONLY the context notes provided — these are the user's own saved articles/videos. If the context doesn't contain the answer, say so plainly instead of guessing.
+
+Cite which source(s) you used by title at the end of relevant sentences, like (Source: <title>).
+
+# Context notes
+{context}
+
+# Question
+{req.question}"""
+
+    llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+    answer = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+
+    return {
+        "answer": answer,
+        "sources": [{"title": a.title, "url": a.url} for a in top],
+    }
+
+@app.post("/vault/reindex")
+def reindex_vault(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Backfills embeddings and concept tags for articles saved/liked before
+    semantic search / the knowledge graph existed. Runs in the background
+    since these are rate-limited LLM calls and this can take a while for a
+    large vault."""
+    from llm_client import resolve_llm_config
+
+    def _reindex():
+        session = next(get_db())
+        try:
+            settings = session.query(models.Settings).first()
+            llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+            missing_embedding = session.query(models.Article).filter(models.Article.embedding.is_(None)).all()
+            for article in missing_embedding:
+                _embed_article(article, settings, session)
+            missing_tags = session.query(models.Article).filter(models.Article.tags.is_(None)).all()
+            for article in missing_tags:
+                _generate_tags(article, llm_engine, ollama_model, api_key, session)
+        finally:
+            session.close()
+
+    pending_embeddings = db.query(models.Article).filter(models.Article.embedding.is_(None)).count()
+    pending_tags = db.query(models.Article).filter(models.Article.tags.is_(None)).count()
+    background_tasks.add_task(_reindex)
+    return {"message": f"Reindexing {pending_embeddings} embedding(s) and {pending_tags} tag set(s) in the background."}
 
 @app.get("/cves")
 def get_cves(limit: int = 50, db: Session = Depends(get_db)):
@@ -408,40 +634,129 @@ def refresh_cves(background_tasks: BackgroundTasks, db: Session = Depends(get_db
     return {"message": f"CVE refresh started for {len(keywords)} keyword(s) in the background."}
 
 @app.post("/agent/research")
-def run_research_agent(req: PromptRequest):
-    return {"response": research_agent.process_and_save(req.prompt)}
+def run_research_agent(req: PromptRequest, db: Session = Depends(get_db)):
+    """Researches a topic, grounding the answer in the user's own saved
+    vault notes when any are semantically relevant, then saves the result
+    as a new vault article (so it's browsable in "My Saved Vault" and
+    searchable via /ask, same as anything else saved)."""
+    from llm_client import resolve_llm_config
+
+    settings = db.query(models.Settings).first()
+    llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+
+    relevant = _search_vault(req.prompt, settings, db, top_k=3)
+    vault_context = "\n\n".join(
+        f"### {a.title}\n{(a.notes or a.summary or '')[:1500]}" for a in relevant
+    )
+
+    response = research_agent.research(req.prompt, llm_engine, ollama_model, api_key, vault_context)
+
+    article = models.Article(
+        title=f"Research: {req.prompt}"[:200],
+        author="Research Agent",
+        source="Research Agent",
+        url=f"research-agent://{time.time()}-{req.prompt[:80]}",
+        content=response,
+        summary=response,
+        category="Research",
+    )
+    db.add(article)
+    db.commit()
+    _embed_article(article, settings, db)
+    _generate_tags(article, llm_engine, ollama_model, api_key, db)
+
+    saved_path = None
+    try:
+        saved_path = _write_note_to_vault(db, article, "AI Research", response)
+        article.saved_to_obsidian = True
+        db.commit()
+    except HTTPException:
+        pass
+
+    return {
+        "response": response,
+        "grounded_on": [a.title for a in relevant],
+        "saved_to_vault": bool(saved_path),
+    }
 
 @app.post("/agent/runbook")
-def run_runbook_agent(req: PromptRequest):
-    return {"response": runbook_agent.generate_runbook(req.prompt)}
+def run_runbook_agent(req: PromptRequest, db: Session = Depends(get_db)):
+    """Generates an incident runbook and saves it as a vault article."""
+    from llm_client import resolve_llm_config
+
+    settings = db.query(models.Settings).first()
+    llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+    response = runbook_agent.generate_runbook(req.prompt, llm_engine, ollama_model, api_key)
+
+    article = models.Article(
+        title=f"Runbook: {req.prompt}"[:200],
+        author="Runbook Agent",
+        source="Runbook Agent",
+        url=f"runbook-agent://{time.time()}-{req.prompt[:80]}",
+        content=response,
+        summary=response,
+        category="Runbook",
+    )
+    db.add(article)
+    db.commit()
+
+    saved_path = None
+    try:
+        saved_path = _write_note_to_vault(db, article, "Runbook", response)
+        article.saved_to_obsidian = True
+        db.commit()
+    except HTTPException:
+        pass
+
+    return {"response": response, "saved_to_vault": bool(saved_path)}
 
 # ─── Knowledge Graph ──────────────────────────────────────────────────────────
 @app.get("/api/graph")
 def get_graph(db: Session = Depends(get_db)):
+    import json
+
     settings = db.query(models.Settings).first()
-    keywords = [k.strip() for k in (settings.keywords if settings else "SRE, DevOps").split(",") if k.strip()]
+    fallback_keywords = [k.strip() for k in (settings.keywords if settings else "SRE, DevOps").split(",") if k.strip()]
     articles = db.query(models.Article).order_by(models.Article.created_at.desc()).limit(100).all()
 
     nodes = []
     links = []
     seen_ids = set()
+    seen_tag_ids = set()
 
-    # Keyword nodes
-    for kw in keywords:
-        nid = f"kw_{kw}"
-        nodes.append({"id": nid, "label": kw, "type": "keyword", "val": 12})
-        seen_ids.add(nid)
+    def ensure_tag_node(tag: str):
+        nid = f"kw_{tag}"
+        if nid not in seen_tag_ids:
+            nodes.append({"id": nid, "label": tag, "type": "keyword", "val": 12})
+            seen_tag_ids.add(nid)
+        return nid
 
-    # Article nodes + edges to keyword
     for art in articles:
         nid = f"art_{art.id}"
         if nid not in seen_ids:
             nodes.append({"id": nid, "label": art.title[:50], "url": art.url, "source": art.source, "type": "article", "val": 6})
             seen_ids.add(nid)
-        # Link to matching keywords
-        for kw in keywords:
-            if kw.lower() in (art.title or "").lower() or kw.lower() in (art.content or "")[:500].lower():
-                links.append({"source": f"kw_{kw}", "target": nid})
+
+        # Prefer real LLM-extracted concept tags (see _generate_tags) over
+        # crude substring matching — they capture the article's actual
+        # subject matter instead of just whether a configured keyword
+        # happens to appear literally in the title/content.
+        tags = []
+        if art.tags:
+            try:
+                tags = json.loads(art.tags)
+            except (TypeError, ValueError):
+                tags = []
+
+        if tags:
+            for tag in tags:
+                links.append({"source": ensure_tag_node(tag), "target": nid})
+        else:
+            # Fallback for articles that haven't been tagged yet (older
+            # content, or no LLM configured) so the graph isn't empty for them.
+            for kw in fallback_keywords:
+                if kw.lower() in (art.title or "").lower() or kw.lower() in (art.content or "")[:500].lower():
+                    links.append({"source": ensure_tag_node(kw), "target": nid})
 
     return {"nodes": nodes, "links": links}
 

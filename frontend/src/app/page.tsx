@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, Activity, Zap, RefreshCw, Terminal, CheckCircle2, Bookmark, Eye, EyeOff, X, AlertCircle, Heart } from "lucide-react"
+import { BookOpen, Activity, Zap, RefreshCw, Terminal, CheckCircle2, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText } from "lucide-react"
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -25,6 +25,11 @@ export default function Dashboard() {
   const [savedSearch, setSavedSearch] = useState('')
   const [savedSearchResults, setSavedSearchResults] = useState<any[] | null>(null)
   const [searching, setSearching] = useState(false)
+  const [expandedRelated, setExpandedRelated] = useState<Set<string>>(new Set())
+  const [agentMode, setAgentMode] = useState<'research' | 'runbook'>('research')
+  const [agentInput, setAgentInput] = useState('')
+  const [agentRunning, setAgentRunning] = useState(false)
+  const [agentResult, setAgentResult] = useState('')
   const itemsPerPage = 12
 
   const showToast = (msg: string, type: 'error' | 'success' = 'error') => {
@@ -72,6 +77,10 @@ export default function Dashboard() {
     const unviewed: any[] = []
     const viewed: any[] = []
     liveFeed.forEach(item => {
+      // Near-duplicate coverage of the same story is collapsed server-side
+      // onto the newest item's `related` list — skip the collapsed copies
+      // here so they don't also take up a card of their own.
+      if ((item as any).hidden_duplicate) return
       if (viewedUrls.has((item as any).url)) {
         viewed.push(item)
       } else {
@@ -86,6 +95,31 @@ export default function Dashboard() {
     return ['All', ...Array.from(sources)]
   }, [unviewedFeed])
 
+  // Words pulled from active Learning Goal titles/descriptions, used as a
+  // free (no LLM call) relevance signal — how much a feed item's text
+  // overlaps with what the user says they're trying to learn right now.
+  const goalKeywords = useMemo(() => {
+    const stopwords = new Set(['this','that','with','from','have','will','your','about','into','learn','learning','the','and','for','are','you'])
+    const words = new Set<string>()
+    for (const g of goals) {
+      const text = `${g.title || ''} ${g.description || ''}`.toLowerCase()
+      for (const w of text.match(/[a-z0-9]+/g) || []) {
+        if (w.length > 3 && !stopwords.has(w)) words.add(w)
+      }
+    }
+    return words
+  }, [goals])
+
+  const relevanceScore = (item: any) => {
+    if (goalKeywords.size === 0) return 0
+    const text = `${item.title || ''} ${item.summary || ''}`.toLowerCase()
+    let score = 0
+    for (const w of goalKeywords) {
+      if (text.includes(w)) score++
+    }
+    return score
+  }
+
   const displayedFeed = useMemo(() => {
     let filtered = [...unviewedFeed]
     if (sourceFilter !== 'All') {
@@ -95,6 +129,12 @@ export default function Dashboard() {
       filtered.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
     } else if (sortBy === 'Oldest') {
       filtered.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0))
+    } else if (sortBy === 'Relevant') {
+      // Higher overlap with active goals first; ties broken by recency.
+      filtered.sort((a: any, b: any) => {
+        const diff = relevanceScore(b) - relevanceScore(a)
+        return diff !== 0 ? diff : (b.timestamp || 0) - (a.timestamp || 0)
+      })
     } else if (sortBy === 'Balanced') {
       // Round-robin across keyword/feed groups (each internally newest-first)
       // so one trending keyword can't bury every other topic on page 1.
@@ -122,7 +162,7 @@ export default function Dashboard() {
       filtered = bucketed
     }
     return filtered.slice(0, currentPage * itemsPerPage)
-  }, [unviewedFeed, currentPage, sourceFilter, sortBy])
+  }, [unviewedFeed, currentPage, sourceFilter, sortBy, goalKeywords])
 
   const fetchSavedArticles = async () => {
     try {
@@ -286,10 +326,42 @@ export default function Dashboard() {
     setIngesting(false)
   }
 
+  const handleRunAgent = async () => {
+    if (!agentInput.trim()) return
+    setAgentRunning(true)
+    setAgentResult('')
+    try {
+      const endpoint = agentMode === 'research' ? '/agent/research' : '/agent/runbook'
+      const res = await fetch(`${API}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: agentInput.trim() })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        showToast(data.detail || 'Agent failed')
+      } else {
+        setAgentResult(data.response)
+        showToast(data.saved_to_vault ? 'Saved to your vault ✓' : 'Done (vault not configured, so not saved to a file)', 'success')
+        fetchSavedArticles()
+      }
+    } catch (e) {
+      showToast('Failed to reach the backend.')
+    }
+    setAgentRunning(false)
+  }
+
   // Open article and mark as viewed
   const openItem = (item: any) => {
     window.open(item.url, '_blank')
     markAsViewed(item.url)
+  }
+
+  // Research/Runbook agent output is saved as an Article with a synthetic
+  // research-agent:// / runbook-agent:// url (no real page to open), so
+  // guard against trying to open those as a link.
+  const openSavedItem = (item: any) => {
+    if (item.url?.startsWith('http')) window.open(item.url, '_blank')
   }
 
   const FeedCard = ({ item, showUnviewBtn = false }: { item: any; showUnviewBtn?: boolean }) => {
@@ -300,6 +372,14 @@ export default function Dashboard() {
     const isSaving = processingAction?.url === item.url && processingAction?.action === 'save'
     const isLiking = processingAction?.url === item.url && processingAction?.action === 'like'
     const isViewed = viewedUrls.has(item.url)
+    const showRelated = expandedRelated.has(item.url)
+    const toggleRelated = () => {
+      setExpandedRelated(prev => {
+        const next = new Set(prev)
+        next.has(item.url) ? next.delete(item.url) : next.add(item.url)
+        return next
+      })
+    }
 
     return (
       <div
@@ -335,6 +415,31 @@ export default function Dashboard() {
               )}
             </div>
             <h3 className="font-semibold text-sm leading-snug group-hover:text-emerald-400 transition-colors line-clamp-2">{item.title}</h3>
+            {item.related?.length > 0 && (
+              <div onClick={e => e.stopPropagation()} className="mt-1.5">
+                <button
+                  onClick={toggleRelated}
+                  className="text-[10px] font-bold text-zinc-500 hover:text-zinc-300 cursor-pointer"
+                >
+                  {showRelated ? '▾' : '▸'} Similar coverage: {item.related.length} more source{item.related.length > 1 ? 's' : ''}
+                </button>
+                {showRelated && (
+                  <div className="mt-1.5 space-y-1">
+                    {item.related.map((r: any, ri: number) => (
+                      <a
+                        key={ri}
+                        href={r.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block text-[10px] text-zinc-500 hover:text-emerald-400 truncate"
+                      >
+                        {r.source}: {r.title}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className={`text-xs mb-4 flex-1 ${isSaved ? 'text-zinc-300' : 'text-zinc-600 italic line-clamp-3'} prose prose-invert prose-p:leading-snug prose-headings:text-emerald-400 prose-a:text-blue-400 prose-sm max-w-none`}>
@@ -511,6 +616,7 @@ export default function Dashboard() {
                         <option value="Newest">Newest First</option>
                         <option value="Oldest">Oldest First</option>
                         <option value="Balanced">Balanced (Mix Topics)</option>
+                        {goals.length > 0 && <option value="Relevant">Relevant to My Goals</option>}
                       </select>
                     </div>
                   </div>
@@ -600,7 +706,7 @@ export default function Dashboard() {
                   savedSearchResults!.map((item: any, i) => (
                     <div
                       key={i}
-                      onClick={() => window.open(item.url, '_blank')}
+                      onClick={() => openSavedItem(item)}
                       className="flex items-start gap-3 p-4 bg-zinc-950 rounded-lg border border-zinc-800 hover:border-blue-800/50 transition-colors cursor-pointer group"
                     >
                       <div className="flex-1 min-w-0">
@@ -618,7 +724,7 @@ export default function Dashboard() {
                 savedArticles.map((item: any, i) => (
                   <div
                     key={i}
-                    onClick={() => window.open(item.url, '_blank')}
+                    onClick={() => openSavedItem(item)}
                     className="flex items-start gap-3 p-4 bg-zinc-950 rounded-lg border border-zinc-800 hover:border-blue-800/50 transition-colors cursor-pointer group"
                   >
                     <div className="flex-1 min-w-0">
@@ -656,6 +762,49 @@ export default function Dashboard() {
             >
               {ingesting ? 'Summarizing...' : 'Ingest to Vault'}
             </button>
+          </section>
+
+          <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-3">
+              {[
+                { key: 'research', label: '🔎 Research', icon: Sparkles },
+                { key: 'runbook', label: '📋 Runbook', icon: FileText },
+              ].map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => setAgentMode(t.key as 'research' | 'runbook')}
+                  className={`flex-1 text-xs font-bold py-2 rounded-lg transition-colors cursor-pointer
+                    ${agentMode === t.key ? 'bg-teal-700 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-zinc-500 mb-3">
+              {agentMode === 'research'
+                ? 'Ask the Research Agent to investigate a topic — grounded in your own saved vault when relevant.'
+                : 'Describe an incident and get a structured runbook.'}
+            </p>
+            <textarea
+              value={agentInput}
+              onChange={e => setAgentInput(e.target.value)}
+              placeholder={agentMode === 'research' ? 'e.g. Kubernetes RBAC best practices' : 'e.g. Pod stuck in CrashLoopBackOff'}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/50 text-zinc-100 mb-3 min-h-[70px] resize-none"
+            />
+            <button
+              onClick={handleRunAgent}
+              disabled={agentRunning || !agentInput.trim()}
+              className="w-full bg-teal-700 hover:bg-teal-600 disabled:opacity-50 py-2.5 rounded-lg font-bold text-sm transition-colors cursor-pointer"
+            >
+              {agentRunning ? 'Working...' : agentMode === 'research' ? 'Research & Save' : 'Generate Runbook'}
+            </button>
+            {agentResult && (
+              <div className="mt-3 bg-zinc-950 border border-zinc-800 rounded-lg p-3 max-h-64 overflow-y-auto">
+                <div className="prose prose-invert prose-xs max-w-none prose-p:leading-snug prose-headings:text-teal-400">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{agentResult}</ReactMarkdown>
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="bg-zinc-900 border border-red-900/40 rounded-xl p-5">

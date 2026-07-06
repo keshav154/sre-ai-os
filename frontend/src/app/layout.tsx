@@ -25,6 +25,7 @@ export default function RootLayout({
           {[
             { href: '/', label: 'Dashboard', emoji: '🏠' },
             { href: '/knowledge', label: 'Knowledge Graph', emoji: '🕸️' },
+            { href: '/quiz', label: 'Recall Quiz', emoji: '🧠' },
             { href: '/learning', label: 'Learning Path', emoji: '🎓' },
             { href: '/settings', label: 'Settings', emoji: '⚙️' },
           ].map(item => (
