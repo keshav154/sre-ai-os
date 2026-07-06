@@ -177,8 +177,8 @@ export default function Dashboard() {
   const FeedCard = ({ item, showUnviewBtn = false }: { item: any; showUnviewBtn?: boolean }) => {
     const savedItem = savedArticlesMap.get(item.url)
     const isSaved = !!savedItem
-    const isSummarizing = processingAction?.url === item.url && processingAction.action === 'summarize'
-    const isSaving = processingAction?.url === item.url && processingAction.action === 'save'
+    const isSummarizing = processingAction?.url === item.url && processingAction?.action === 'summarize'
+    const isSaving = processingAction?.url === item.url && processingAction?.action === 'save'
     const isViewed = viewedUrls.has(item.url)
 
     return (
