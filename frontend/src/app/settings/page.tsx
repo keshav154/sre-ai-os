@@ -12,11 +12,16 @@ export default function Settings() {
   const [geminiKey, setGeminiKey] = useState("")
   const [customFeeds, setCustomFeeds] = useState("https://devops.com/feed/,\nhttps://thenewstack.io/feed/,\nhttps://www.infoq.com/devops/news/rss/,\nhttps://aws.amazon.com/blogs/devops/feed/,\nhttps://netflixtechblog.com/feed,\nhttps://blog.cloudflare.com/rss/,\nhttps://kubernetes.io/feed.xml")
   const [obsidianVaultPath, setObsidianVaultPath] = useState("")
+  const [githubRepo, setGithubRepo] = useState("")
+  const [githubToken, setGithubToken] = useState("")
+
   const [saving, setSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
 
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
   useEffect(() => {
-    fetch('http://localhost:8000/settings')
+    fetch(`${API}/settings`)
       .then(r => r.json())
       .then(d => {
         setKeywords(d.keywords || "SRE, DevOps")
@@ -28,6 +33,8 @@ export default function Settings() {
         setGeminiKey(d.gemini_key || "")
         setCustomFeeds(d.custom_feeds || "https://devops.com/feed/,\nhttps://thenewstack.io/feed/,\nhttps://www.infoq.com/devops/news/rss/,\nhttps://aws.amazon.com/blogs/devops/feed/,\nhttps://netflixtechblog.com/feed,\nhttps://blog.cloudflare.com/rss/,\nhttps://kubernetes.io/feed.xml")
         setObsidianVaultPath(d.obsidian_vault_path || "")
+        setGithubRepo(d.github_repo || "")
+        setGithubToken(d.github_token || "")
       })
       .catch(console.error)
   }, [])
@@ -36,7 +43,7 @@ export default function Settings() {
     setSaving(true)
     setSaveStatus('idle')
     try {
-      await fetch('http://localhost:8000/settings', {
+      await fetch(`${API}/settings`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ 
@@ -48,7 +55,9 @@ export default function Settings() {
           anthropic_key: anthropicKey,
           gemini_key: geminiKey,
           custom_feeds: customFeeds,
-          obsidian_vault_path: obsidianVaultPath
+          obsidian_vault_path: obsidianVaultPath,
+          github_repo: githubRepo,
+          github_token: githubToken
         })
       })
       setSaveStatus('success')
@@ -192,6 +201,44 @@ export default function Settings() {
           />
           <p className="text-xs text-zinc-500">
             To find your vault path in Obsidian: open Settings → Files &amp; Links → Vault location. Copy the full path.
+          </p>
+        </section>
+      </div>
+
+      {/* GitHub Sync Section */}
+      <div className="mt-8 max-w-5xl">
+        <section className="bg-zinc-900 border border-blue-900/40 rounded-xl p-6 shadow-xl">
+          <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+            <span className="text-blue-400 text-2xl">☁️</span> Cloud Sync (GitHub to Obsidian)
+          </h2>
+          <p className="text-sm text-zinc-400 mb-4">
+            If deploying to the cloud (like Render.com), local vault paths won't work. Instead, provide a GitHub repository and token.
+            Articles saved via "Save to Vault" will be committed as Markdown files to your repo. You can sync them locally using the <strong>Obsidian Git</strong> plugin!
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+            <div>
+              <label className="block text-xs font-semibold mb-1 text-zinc-300">GitHub Repository (e.g. username/repo)</label>
+              <input
+                type="text"
+                value={githubRepo}
+                onChange={e => setGithubRepo(e.target.value)}
+                placeholder="username/my-obsidian-notes"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1 text-zinc-300">GitHub Personal Access Token</label>
+              <input
+                type="password"
+                value={githubToken}
+                onChange={e => setGithubToken(e.target.value)}
+                placeholder="ghp_..."
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Ensure your token has "repo" scope (classic token) or "Contents" read/write (fine-grained token).
           </p>
         </section>
       </div>

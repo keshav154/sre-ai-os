@@ -43,7 +43,7 @@ export default function KnowledgeGraph() {
   const fetchGraph = async () => {
     setLoading(true)
     try {
-      const res = await fetch('http://localhost:8000/api/graph')
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/graph`)
       const data = await res.json()
       setGraphData(data)
     } catch (e) {

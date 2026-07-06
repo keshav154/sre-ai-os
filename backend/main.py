@@ -59,6 +59,8 @@ class SettingsUpdate(BaseModel):
     gemini_key: Optional[str] = None
     custom_feeds: Optional[str] = None
     obsidian_vault_path: Optional[str] = None
+    github_repo: Optional[str] = None
+    github_token: Optional[str] = None
 
 @app.get("/settings")
 def get_settings(db: Session = Depends(get_db)):
@@ -81,7 +83,9 @@ def get_settings(db: Session = Depends(get_db)):
         "anthropic_key": settings.anthropic_key,
         "gemini_key": settings.gemini_key,
         "custom_feeds": settings.custom_feeds,
-        "obsidian_vault_path": settings.obsidian_vault_path
+        "obsidian_vault_path": settings.obsidian_vault_path,
+        "github_repo": settings.github_repo,
+        "github_token": settings.github_token
     }
 
 @app.post("/settings")
@@ -111,6 +115,10 @@ def update_settings(req: SettingsUpdate, db: Session = Depends(get_db)):
             settings.custom_feeds = req.custom_feeds
         if req.obsidian_vault_path is not None:
             settings.obsidian_vault_path = req.obsidian_vault_path
+        if req.github_repo is not None:
+            settings.github_repo = req.github_repo
+        if req.github_token is not None:
+            settings.github_token = req.github_token
     db.commit()
     return {"message": "Settings updated"}
 
@@ -153,11 +161,16 @@ def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
     # Get vault path from DB settings
     settings = db.query(models.Settings).first()
     vault_path = settings.obsidian_vault_path if settings and settings.obsidian_vault_path else None
+    github_repo = settings.github_repo if settings and settings.github_repo else None
+    github_token = settings.github_token if settings and settings.github_token else None
     
-    if not vault_path:
-        raise HTTPException(status_code=400, detail="Obsidian vault path is not configured. Please set it in Settings.")
-    if not os.path.isdir(vault_path):
-        raise HTTPException(status_code=400, detail=f"Obsidian vault path does not exist: {vault_path}")
+    use_github = bool(github_repo and github_token)
+    
+    if not use_github:
+        if not vault_path:
+            raise HTTPException(status_code=400, detail="Obsidian vault path is not configured. Please set it or configure GitHub Sync in Settings.")
+        if not os.path.isdir(vault_path):
+            raise HTTPException(status_code=400, detail=f"Obsidian vault path does not exist: {vault_path}")
 
     # Ingest first if not already in DB
     article = db.query(models.Article).filter(models.Article.url == req.url).first()
@@ -200,13 +213,28 @@ tags: [sre, ai-os]
 ---
 *Saved by SRE AI OS*
 """
-        # Create Knowledge folder inside vault
-        knowledge_dir = os.path.join(vault_path, "SRE-AI-OS")
-        os.makedirs(knowledge_dir, exist_ok=True)
-        
-        file_path = os.path.join(knowledge_dir, f"{safe_title[:80]}.md")
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(note_content)
+        if use_github:
+            from github import Github
+            g = Github(github_token)
+            repo = g.get_repo(github_repo)
+            file_path = f"SRE-AI-OS/{safe_title[:80]}.md"
+            
+            try:
+                # Try to get file first to see if it exists (for update)
+                contents = repo.get_contents(file_path)
+                repo.update_file(contents.path, f"Update {safe_title}", note_content, contents.sha)
+            except Exception as e:
+                # If it doesn't exist, create it (404)
+                repo.create_file(file_path, f"Add {safe_title}", note_content)
+                
+        else:
+            # Create Knowledge folder inside vault locally
+            knowledge_dir = os.path.join(vault_path, "SRE-AI-OS")
+            os.makedirs(knowledge_dir, exist_ok=True)
+            
+            file_path = os.path.join(knowledge_dir, f"{safe_title[:80]}.md")
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(note_content)
         
         article.saved_to_obsidian = True
         db.commit()

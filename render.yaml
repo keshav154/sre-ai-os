@@ -1,0 +1,27 @@
+services:
+  # Backend API Service
+  - type: web
+    name: sre-ai-os-backend
+    env: python
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: PORT
+        value: 10000
+
+  # Frontend Web Service
+  - type: web
+    name: sre-ai-os-frontend
+    env: node
+    rootDir: frontend
+    buildCommand: "npm install && npm run build"
+    startCommand: "npm start"
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: sre-ai-os-backend
+          envVarKey: RENDER_EXTERNAL_URL

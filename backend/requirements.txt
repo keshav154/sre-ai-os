@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+requests
+beautifulsoup4
+feedparser
+youtube-transcript-api
+openai
+psycopg2-binary
+PyGithub

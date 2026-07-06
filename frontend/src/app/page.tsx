@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { BookOpen, Activity, Zap, RefreshCw, Terminal, CheckCircle2, Bookmark, Eye, EyeOff, X, AlertCircle } from "lucide-react"
 
-const API = 'http://localhost:8000'
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function Dashboard() {
   const [savedArticles, setSavedArticles] = useState([])

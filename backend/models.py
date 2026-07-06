@@ -23,6 +23,8 @@ class Settings(Base):
     keywords = Column(String, default="SRE, DevOps")
     llm_engine = Column(String, default="ollama")
     ollama_model = Column(String, default="llama3:latest")
+    github_repo = Column(String, nullable=True)
+    github_token = Column(String, nullable=True)
     openrouter_key = Column(String, nullable=True)
     openai_key = Column(String, nullable=True)
     anthropic_key = Column(String, nullable=True)
