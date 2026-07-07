@@ -23,6 +23,8 @@ export default function Settings() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const [testingDigest, setTestingDigest] = useState(false)
   const [digestResult, setDigestResult] = useState('')
+  const [testingYoutube, setTestingYoutube] = useState(false)
+  const [youtubeTestResult, setYoutubeTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -102,6 +104,21 @@ export default function Settings() {
     setTestingDigest(false)
   }
 
+  const handleTestYoutubeKey = async () => {
+    setTestingYoutube(true)
+    setYoutubeTestResult(null)
+    try {
+      // Persist the key first so the backend has the current value to test.
+      await handleSave()
+      const res = await apiFetch(`${API}/settings/test-youtube-key`, { method: 'POST' })
+      const data = await res.json()
+      setYoutubeTestResult(data)
+    } catch (e) {
+      setYoutubeTestResult({ ok: false, message: 'Failed to reach backend.' })
+    }
+    setTestingYoutube(false)
+  }
+
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 p-8 font-sans">
       <header className="mb-10">
@@ -139,8 +156,20 @@ export default function Settings() {
             value={youtubeApiKey}
             onChange={(e) => setYoutubeApiKey(e.target.value)}
             placeholder="AIzaSy..."
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm mb-2"
           />
+          <button
+            onClick={handleTestYoutubeKey}
+            disabled={testingYoutube || !youtubeApiKey}
+            className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 font-bold transition-colors cursor-pointer"
+          >
+            {testingYoutube ? 'Testing...' : 'Test Connection'}
+          </button>
+          {youtubeTestResult && (
+            <p className={`text-xs mt-2 ${youtubeTestResult.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+              {youtubeTestResult.ok ? '✓' : '✗'} {youtubeTestResult.message}
+            </p>
+          )}
         </section>
 
         <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 shadow-xl">

@@ -1071,6 +1071,56 @@ def refresh_cves(background_tasks: BackgroundTasks, db: Session = Depends(get_db
     background_tasks.add_task(fetch_and_store_cves, db, keywords)
     return {"message": f"CVE refresh started for {len(keywords)} keyword(s) in the background."}
 
+@app.post("/settings/test-youtube-key")
+def test_youtube_key(db: Session = Depends(get_db)):
+    """Makes one real, minimal call to the YouTube Data API with the
+    configured key and returns a specific, human-readable diagnosis
+    instead of the discover feed just silently showing zero videos —
+    Google's error responses (bad key, API not enabled, quota exceeded,
+    referrer-restricted key) are all distinguishable from the response
+    body, but that detail was previously only visible in server logs."""
+    settings = db.query(models.Settings).first()
+    api_key = settings.youtube_api_key if settings else None
+    if not api_key:
+        return {"ok": False, "message": "No YouTube API key is saved in Settings yet."}
+
+    try:
+        resp = requests.get(
+            "https://www.googleapis.com/youtube/v3/search",
+            params={"key": api_key, "q": "test", "part": "snippet", "type": "video", "maxResults": 1},
+            timeout=10,
+        )
+    except Exception as e:
+        return {"ok": False, "message": f"Could not reach the YouTube API: {e}"}
+
+    if resp.status_code == 200:
+        found = len(resp.json().get("items", []))
+        return {"ok": True, "message": f"Key works — got {found} result(s) back from a live test search."}
+
+    # Google's error body looks like: {"error": {"code": 403, "errors": [{"reason": "...", "message": "..."}]}}
+    reason = None
+    detail_message = None
+    try:
+        err = resp.json().get("error", {})
+        detail_message = err.get("message")
+        errors = err.get("errors", [])
+        if errors:
+            reason = errors[0].get("reason")
+    except Exception:
+        pass
+
+    friendly = {
+        "keyInvalid": "This API key isn't valid — double check you copied it correctly from Google Cloud Console.",
+        "badRequest": "This API key isn't valid (Google rejected it outright) — double check you copied the whole key correctly, with no extra spaces, from Google Cloud Console.",
+        "accessNotConfigured": "The YouTube Data API v3 isn't enabled for this key's Google Cloud project — go to APIs & Services > Library, search for it, and click Enable.",
+        "quotaExceeded": "This key has hit its daily quota (10,000 units/day by default) — it'll reset at midnight Pacific time, or use a different key.",
+        "dailyLimitExceededUnreg": "This key has hit its daily quota.",
+        "ipRefererBlocked": "This key is restricted to specific websites/referrers, which blocks server-to-server calls from this backend. In Google Cloud Console, edit the key's Application restrictions to 'None' or 'IP addresses' (not 'HTTP referrers').",
+    }.get(reason)
+
+    message = friendly or detail_message or f"YouTube API returned HTTP {resp.status_code}."
+    return {"ok": False, "message": message, "reason": reason}
+
 @app.post("/agent/research")
 def run_research_agent(req: PromptRequest, db: Session = Depends(get_db)):
     """Researches a topic, grounding the answer in the user's own saved
