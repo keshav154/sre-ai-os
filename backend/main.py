@@ -107,6 +107,12 @@ class PromptRequest(BaseModel):
 
 class UrlRequest(BaseModel):
     url: str
+    # Optional hints from the discover feed (RSS title/summary) used as a
+    # last-resort fallback if the full page fetch gets bot-blocked — the
+    # frontend already has these in memory for feed items, so passing them
+    # along costs nothing and means a block doesn't have to be a dead end.
+    fallback_title: Optional[str] = None
+    fallback_content: Optional[str] = None
 
 @app.get("/")
 def read_root():
@@ -170,7 +176,7 @@ def get_articles(q: Optional[str] = None, limit: int = 100, offset: int = 0, db:
 
 @app.post("/ingest")
 def trigger_ingest(req: UrlRequest, db: Session = Depends(get_db)):
-    result = ingest_url(req.url, db)
+    result = ingest_url(req.url, db, fallback_title=req.fallback_title, fallback_content=req.fallback_content)
     return {"message": "Content successfully ingested and summarized.", "data": result}
 
 @app.get("/discover")
@@ -328,7 +334,7 @@ def summarize_article(req: UrlRequest, db: Session = Depends(get_db)):
         return {"title": article.title, "summary": summary, "status": "success"}
     else:
         # If it doesn't exist, ingest it and summarize
-        res = ingest_url(req.url, db, summarize=True)
+        res = ingest_url(req.url, db, summarize=True, fallback_title=req.fallback_title, fallback_content=req.fallback_content)
         if "error" in res and res.get("status") == "blocked":
             raise HTTPException(status_code=400, detail=res["error"])
         return res
@@ -410,7 +416,7 @@ def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
     # Ingest first if not already in DB
     article = db.query(models.Article).filter(models.Article.url == req.url).first()
     if not article:
-        result = ingest_url(req.url, db, summarize=False)
+        result = ingest_url(req.url, db, summarize=False, fallback_title=req.fallback_title, fallback_content=req.fallback_content)
         if "error" in result and result.get("status") == "blocked":
             raise HTTPException(status_code=400, detail=result["error"])
         article = db.query(models.Article).filter(models.Article.url == req.url).first()
@@ -594,7 +600,7 @@ def like_item(req: UrlRequest, db: Session = Depends(get_db)):
 
     article = db.query(models.Article).filter(models.Article.url == req.url).first()
     if not article:
-        result = ingest_url(req.url, db, summarize=False)
+        result = ingest_url(req.url, db, summarize=False, fallback_title=req.fallback_title, fallback_content=req.fallback_content)
         if "error" in result and result.get("status") == "blocked":
             raise HTTPException(status_code=400, detail=result["error"])
         article = db.query(models.Article).filter(models.Article.url == req.url).first()

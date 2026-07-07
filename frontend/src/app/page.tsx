@@ -314,13 +314,22 @@ export default function Dashboard() {
     setDiscovering(false)
   }
 
-  const handleSummarize = async (targetUrl: string) => {
+  // `feedItem` is passed when the action originates from a discover feed
+  // card — its RSS-provided title/summary become a last-resort fallback
+  // server-side if the full page fetch gets bot-blocked, so a block
+  // doesn't have to be a dead end.
+  const fallbackFields = (feedItem?: any) => feedItem ? {
+    fallback_title: feedItem.title,
+    fallback_content: feedItem.summary,
+  } : {}
+
+  const handleSummarize = async (targetUrl: string, feedItem?: any) => {
     setProcessingAction({ url: targetUrl, action: 'summarize' })
     try {
       const res = await apiFetch(`${API}/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl })
+        body: JSON.stringify({ url: targetUrl, ...fallbackFields(feedItem) })
       })
       if (!res.ok) {
         const err = await res.json()
@@ -331,13 +340,13 @@ export default function Dashboard() {
     setProcessingAction(null)
   }
 
-  const handleSaveToVault = async (targetUrl: string) => {
+  const handleSaveToVault = async (targetUrl: string, feedItem?: any) => {
     setProcessingAction({ url: targetUrl, action: 'save' })
     try {
       const res = await apiFetch(`${API}/save-to-vault`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl })
+        body: JSON.stringify({ url: targetUrl, ...fallbackFields(feedItem) })
       })
       if (!res.ok) {
         const err = await res.json()
@@ -350,13 +359,13 @@ export default function Dashboard() {
     setProcessingAction(null)
   }
 
-  const handleLike = async (targetUrl: string) => {
+  const handleLike = async (targetUrl: string, feedItem?: any) => {
     setProcessingAction({ url: targetUrl, action: 'like' })
     try {
       const res = await apiFetch(`${API}/like`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl })
+        body: JSON.stringify({ url: targetUrl, ...fallbackFields(feedItem) })
       })
       const data = await res.json()
       if (!res.ok) {
@@ -508,7 +517,7 @@ export default function Dashboard() {
 
           <div className="mt-auto flex gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
             <button
-              onClick={() => handleLike(item.url)}
+              onClick={() => handleLike(item.url, item)}
               disabled={isLiking || isLiked}
               title={isLiked ? 'Liked — AI notes generated' : 'Like & generate AI notes'}
               className={`text-xs px-2.5 py-1.5 rounded-md font-bold transition-colors cursor-pointer disabled:cursor-default
@@ -518,7 +527,7 @@ export default function Dashboard() {
             </button>
             {!isSaved && (
               <button
-                onClick={() => handleSummarize(item.url)}
+                onClick={() => handleSummarize(item.url, item)}
                 disabled={isSummarizing || isSaving}
                 className="flex-1 text-xs px-2 py-1.5 rounded-md font-bold bg-blue-700 hover:bg-blue-600 text-white transition-colors cursor-pointer disabled:opacity-50"
               >
@@ -527,7 +536,7 @@ export default function Dashboard() {
             )}
             {isSaved && !savedItem.saved_to_obsidian && (
               <button
-                onClick={() => handleSummarize(item.url)}
+                onClick={() => handleSummarize(item.url, item)}
                 disabled={isSummarizing || isSaving}
                 className="flex-1 text-xs px-2 py-1.5 rounded-md font-bold bg-blue-700 hover:bg-blue-600 text-white transition-colors cursor-pointer"
               >
@@ -536,7 +545,7 @@ export default function Dashboard() {
             )}
             {(!isSaved || !savedItem?.saved_to_obsidian) && (
               <button
-                onClick={() => handleSaveToVault(item.url)}
+                onClick={() => handleSaveToVault(item.url, item)}
                 disabled={isSaving || isSummarizing}
                 className="flex-1 text-xs px-2 py-1.5 rounded-md font-bold bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer"
               >

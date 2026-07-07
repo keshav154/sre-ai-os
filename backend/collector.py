@@ -26,33 +26,85 @@ def extract_youtube_id(url: str):
     match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
     return match.group(1) if match else None
 
-def ingest_url(url: str, db, summarize: bool = False):
+# Known bot-challenge / gateway phrases — checked against both the page
+# title AND a slice of the body text, since some challenge pages (e.g.
+# reCAPTCHA interstitials) keep a normal-looking server-rendered <title>
+# while the actual block message is in the body.
+_JUNK_PHRASES = [
+    "just a moment", "access denied", "attention required", "are you human",
+    "ddos protection", "checking your browser", "please wait", "cloudflare",
+    "403 forbidden", "404 not found",
+    "verify you are human", "verify you're human", "i'm not a robot", "im not a robot",
+    "unusual traffic", "detected unusual traffic", "captcha", "bot detection",
+    "suspicious activity", "robot check", "prove you're not a robot",
+]
+# Status codes bot walls/rate limiters commonly respond with, even when the
+# HTML body looks superficially page-shaped.
+_BLOCKED_STATUS_CODES = {403, 429, 503}
+
+def _fetch_direct(url: str):
+    """First attempt: fetch the page ourselves. Returns (title, content) on
+    success, or (None, reason) if it looks blocked/unreadable."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        raw_title = soup.title.string.strip() if soup.title else url
+    except Exception as e:
+        return None, f"Could not reach this URL: {e}"
+
+    paragraphs = soup.find_all('p')
+    body_text = " ".join([p.get_text() for p in paragraphs])
+    body_sniff = body_text[:1500].lower()
+
+    # A 403/429/503 is a strong signal but not absolute on its own — a few
+    # CDNs return one of these codes while still serving a full, usable
+    # page (e.g. a stale cached copy). Only treat it as a hard block when
+    # the body also looks like an actual block page (thin content or a
+    # junk-phrase match), otherwise fall through to the normal checks.
+    looks_like_block_page = len(body_text.strip()) < 250 or any(j in body_sniff for j in _JUNK_PHRASES)
+    if response.status_code in _BLOCKED_STATUS_CODES and looks_like_block_page:
+        return None, f"Blocked by bot protection (HTTP {response.status_code})"
+
+    if any(j in raw_title.lower() for j in _JUNK_PHRASES) or any(j in body_sniff for j in _JUNK_PHRASES):
+        return None, f"Blocked by bot protection: '{raw_title}'"
+
+    if len(body_text.strip()) < 100:
+        return None, "No readable content found (possible paywall or bot protection)"
+
+    return raw_title, body_text
+
+def fetch_via_jina_reader(url: str):
+    """Second attempt when the direct fetch is blocked: proxies the page
+    through Jina AI's free Reader service (https://r.jina.ai), which
+    renders it server-side on different infra/IP reputation than ours and
+    returns clean markdown (prefixed with a "Title: ..." line). No API key
+    needed for light use. Returns (title, content), or (None, None) on any
+    failure — this is a best-effort fallback, not a guarantee."""
+    try:
+        resp = requests.get(f"https://r.jina.ai/{url}", timeout=20)
+        resp.raise_for_status()
+        text = resp.text.strip()
+        if len(text) < 100:
+            return None, None
+        title_match = re.match(r'Title:\s*(.+)', text)
+        title = title_match.group(1).strip() if title_match else None
+        return title, text
+    except Exception as e:
+        logger.warning("Jina Reader fallback failed for %s: %s", url, e)
+        return None, None
+
+def ingest_url(url: str, db, summarize: bool = False, fallback_title: str = None, fallback_content: str = None):
     from models import Article, Settings
-    
+
     # Check if already exists
     existing = db.query(Article).filter(Article.url == url).first()
     if existing:
         return {"title": existing.title, "summary": existing.summary, "status": "already_exists"}
-        
+
     title = "Ingested Content"
     content = ""
     source = "Web"
-    
-    # Known bot-challenge / gateway phrases to reject — checked against both
-    # the page title AND a slice of the body text, since some challenge
-    # pages (e.g. reCAPTCHA interstitials) keep a normal-looking server-
-    # rendered <title> while the actual block message is in the body.
-    JUNK_PHRASES = [
-        "just a moment", "access denied", "attention required", "are you human",
-        "ddos protection", "checking your browser", "please wait", "cloudflare",
-        "403 forbidden", "404 not found",
-        "verify you are human", "verify you're human", "i'm not a robot", "im not a robot",
-        "unusual traffic", "detected unusual traffic", "captcha", "bot detection",
-        "suspicious activity", "robot check", "prove you're not a robot",
-    ]
-    # Status codes bot walls/rate limiters commonly respond with, even when
-    # the HTML body looks superficially page-shaped.
-    BLOCKED_STATUS_CODES = {403, 429, 503}
 
     if "youtube.com" in url or "youtu.be" in url:
         video_id = extract_youtube_id(url)
@@ -61,31 +113,32 @@ def ingest_url(url: str, db, summarize: bool = False):
             source = "YouTube"
             title = f"YouTube Video ({video_id})"
     else:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-            response = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            raw_title = soup.title.string.strip() if soup.title else url
-        except Exception as e:
-            logger.warning("Failed to fetch %s: %s", url, e)
-            return {"error": f"Could not reach this URL: {e}", "status": "failed"}
+        block_reason = None
 
-        paragraphs = soup.find_all('p')
-        body_text = " ".join([p.get_text() for p in paragraphs])
-        body_sniff = body_text[:1500].lower()
+        # 1. Try fetching it ourselves.
+        direct_title, direct_result = _fetch_direct(url)
+        if direct_title is not None:
+            title, content = direct_title, direct_result
+        else:
+            block_reason = direct_result
+            logger.warning("Direct fetch blocked for %s: %s", url, block_reason)
 
-        if response.status_code in BLOCKED_STATUS_CODES:
-            return {"error": f"Blocked by bot protection (HTTP {response.status_code}). This site requires a browser to access.", "status": "blocked"}
-
-        if any(j in raw_title.lower() for j in JUNK_PHRASES) or any(j in body_sniff for j in JUNK_PHRASES):
-            return {"error": f"Blocked by bot protection: '{raw_title}'. This site requires a browser to access.", "status": "blocked"}
-
-        title = raw_title
-        content = body_text
-
-        # Reject if content is suspiciously short (bot wall with no text)
-        if len(content.strip()) < 100:
-            return {"error": f"No readable content found at this URL (possible paywall or bot protection).", "status": "blocked"}
+            # 2. Try Jina Reader — different infra/IP than ours, works around
+            # a lot of the bot-walls that block Render's data-center IPs.
+            jina_title, jina_content = fetch_via_jina_reader(url)
+            if jina_content:
+                title = jina_title or fallback_title or url
+                content = jina_content
+                logger.info("Recovered %s via Jina Reader fallback", url)
+            # 3. Last resort: the RSS preview the discover feed already had
+            # for this item, if the caller passed one along. It's short (a
+            # preview, not the full article) but still better than failing.
+            elif fallback_content and len(fallback_content.strip()) >= 40:
+                title = fallback_title or url
+                content = fallback_content
+                logger.info("Recovered %s via RSS summary fallback", url)
+            else:
+                return {"error": f"{block_reason}. Tried an alternate fetch route too, but couldn't get readable content — this site may require a real browser to access.", "status": "blocked"}
 
         source = "Web/Article"
 
@@ -199,10 +252,19 @@ def _title_matches_keyword(title: str, keyword: str) -> bool:
     return bool(re.search(r'\b' + re.escape(keyword.strip()) + r'\b', title, re.IGNORECASE))
 
 def fetch_youtube_via_api(keyword: str, api_key: str, two_years_ago: float, pages: int = 3):
-    """Uses the official YouTube Data API v3 (order=date) for exact publish
-    timestamps instead of scraping+guessing relative-time text. Used when
+    """Uses the official YouTube Data API v3 for exact publish timestamps
+    instead of scraping+guessing relative-time text. Used when
     Settings.youtube_api_key is configured. Pages through up to `pages` *
-    50 results (the API's per-page max) to widen the result pool."""
+    50 results (the API's per-page max) to widen the result pool.
+
+    Uses order=relevance rather than order=date: `date` sorts purely by
+    recency regardless of how weakly a video matches the query, which
+    combined with _title_matches_keyword() below (a title-must-contain-the-
+    keyword backstop) was filtering out nearly every result — the newest
+    matching-anything videos rarely have the literal keyword in their
+    title. `relevance` keeps candidates that are actually about the topic;
+    live_discover() re-sorts everything by real publish time afterward
+    anyway, so recency ordering isn't lost, just the candidate pool changes."""
     local_results = []
     page_token = None
     try:
@@ -212,7 +274,7 @@ def fetch_youtube_via_api(keyword: str, api_key: str, two_years_ago: float, page
                 "q": keyword,
                 "part": "snippet",
                 "type": "video",
-                "order": "date",
+                "order": "relevance",
                 "maxResults": 50,
                 "publishedAfter": datetime.datetime.utcfromtimestamp(two_years_ago).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
@@ -250,6 +312,13 @@ def fetch_youtube_via_api(keyword: str, api_key: str, two_years_ago: float, page
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
+    except requests.exceptions.HTTPError as e:
+        # The response body usually has the actual reason (bad key, API not
+        # enabled on the project, quota exceeded) — surfacing it makes a
+        # misconfigured key diagnosable from logs instead of just silently
+        # returning zero videos.
+        body = e.response.text[:300] if e.response is not None else ""
+        logger.warning("YouTube Data API search failed for %r: %s | %s", keyword, e, body)
     except Exception as e:
         logger.warning("YouTube Data API search failed for %r: %s", keyword, e)
     return local_results
