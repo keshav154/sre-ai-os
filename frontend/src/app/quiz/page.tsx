@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { apiFetch } from '@/lib/api'
 import { Brain, CheckCircle2, XCircle, PartyPopper, RefreshCw } from 'lucide-react'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -25,8 +26,8 @@ export default function Quiz() {
     setLoading(true)
     try {
       const [dueRes, statsRes] = await Promise.all([
-        fetch(`${API}/quiz/due`).then(r => r.json()),
-        fetch(`${API}/quiz/stats`).then(r => r.json()),
+        apiFetch(`${API}/quiz/due`).then(r => r.json()),
+        apiFetch(`${API}/quiz/stats`).then(r => r.json()),
       ])
       setQueue(dueRes)
       setStats(statsRes)
@@ -42,7 +43,7 @@ export default function Quiz() {
     if (!current) return
     setAnswering(true)
     try {
-      await fetch(`${API}/quiz/${current.id}/answer`, {
+      await apiFetch(`${API}/quiz/${current.id}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ correct })

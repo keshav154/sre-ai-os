@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { apiFetch } from '@/lib/api'
 import { Terminal, Settings as SettingsIcon, Save, CheckCircle2, AlertCircle } from "lucide-react"
 
 export default function Settings() {
@@ -26,7 +27,7 @@ export default function Settings() {
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
   useEffect(() => {
-    fetch(`${API}/settings`)
+    apiFetch(`${API}/settings`)
       .then(r => r.json())
       .then(d => {
         setKeywords(d.keywords || "SRE, DevOps")
@@ -51,7 +52,7 @@ export default function Settings() {
     setSaving(true)
     setSaveStatus('idle')
     try {
-      await fetch(`${API}/settings`, {
+      await apiFetch(`${API}/settings`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ 
@@ -86,7 +87,7 @@ export default function Settings() {
     try {
       // Persist the webhook URL first so the backend has it before we trigger a run.
       await handleSave()
-      const res = await fetch(`${API}/digest/run`, { method: 'POST' })
+      const res = await apiFetch(`${API}/digest/run`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) {
         setDigestResult(`Failed: ${data.detail || 'unknown error'}`)

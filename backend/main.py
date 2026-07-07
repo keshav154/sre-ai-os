@@ -1,14 +1,20 @@
 import time
 import datetime
+import difflib
+import logging
 import requests
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional
+from config import settings as env_settings
 from database import engine, Base, get_db
 import models
+import auth
 from collector import ingest_url
 from agents import research_agent, runbook_agent
 
@@ -47,11 +53,47 @@ _add_missing_columns("articles", {
     "notes": "TEXT",
     "embedding": "TEXT",
     "tags": "TEXT",
+    "related_articles": "TEXT",
+})
+_add_missing_columns("learning_steps", {
+    "resources": "TEXT",
 })
 
 app = FastAPI(title="SRE AI OS API")
 
-# Allow Next.js frontend to call the API
+# ─── Auth gate ──────────────────────────────────────────────────────────────
+# This app has no per-user data separation (see /auth/signup) — logging in
+# just proves you're allowed in the door, everyone who's signed up shares
+# the same vault/goals/settings. So the only job of this middleware is to
+# make sure *someone unauthenticated* can't reach any of it, which was the
+# actual problem being fixed here.
+_PUBLIC_PATHS = {"/", "/auth/signup", "/auth/login", "/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect"}
+_CRON_PATHS = {"/digest/run", "/agent/reflect"}
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path in _PUBLIC_PATHS or request.method == "OPTIONS":
+            return await call_next(request)
+
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer ") and auth.decode_access_token(auth_header[7:]) is not None:
+            return await call_next(request)
+
+        # Render Cron Jobs hit /digest/run and /agent/reflect without a user
+        # session — let those in with a separate shared secret instead of
+        # leaving them wide open to anyone.
+        if path in _CRON_PATHS and request.headers.get("X-Cron-Secret") == env_settings.cron_secret:
+            return await call_next(request)
+
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+# Added in reverse-execution order: Starlette wraps the LAST-added
+# middleware outermost, so CORS (added last, here) always gets a chance to
+# attach headers even when AuthMiddleware rejects a request — otherwise a
+# 401 would come back with no CORS headers and the browser would just show
+# an opaque network error instead of a readable 401.
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -69,6 +111,47 @@ class UrlRequest(BaseModel):
 @app.get("/")
 def read_root():
     return {"message": "Welcome to SRE AI OS Backend"}
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+@app.post("/auth/signup")
+def signup(req: SignupRequest, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Please provide a valid email.")
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if db.query(models.User).filter(models.User.email == email).first():
+        raise HTTPException(status_code=400, detail="An account with that email already exists.")
+
+    password_hash, salt = auth.hash_password(req.password)
+    user = models.User(email=email, password_hash=password_hash, password_salt=salt)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = auth.create_access_token(user.id)
+    return {"token": token, "email": user.email}
+
+@app.post("/auth/login")
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user or not auth.verify_password(req.password, user.password_hash, user.password_salt):
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+
+    token = auth.create_access_token(user.id)
+    return {"token": token, "email": user.email}
+
+@app.get("/auth/me")
+def get_me(current_user: models.User = Depends(auth.get_current_user)):
+    return {"email": current_user.email}
 
 @app.get("/articles")
 def get_articles(q: Optional[str] = None, limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
@@ -369,6 +452,42 @@ def _embed_article(article: "models.Article", db_settings, db: Session):
     if vectors:
         article.embedding = json.dumps(vectors[0])
         db.commit()
+        _link_related_articles(article, db)
+
+def _link_related_articles(article: "models.Article", db: Session, top_k: int = 3):
+    """Auto-links this article to the most similar other articles already
+    in the vault, using the embeddings we already computed — no extra LLM
+    call needed, just cosine similarity over vectors we have anyway. This
+    is the kind of connection a second brain is supposed to make for you
+    instead of you having to remember "didn't I save something like this
+    before?" yourself."""
+    import json
+    from llm_client import cosine_similarity
+
+    try:
+        my_vec = json.loads(article.embedding)
+    except (TypeError, ValueError):
+        return
+
+    others = (
+        db.query(models.Article)
+        .filter(models.Article.id != article.id, models.Article.embedding.isnot(None))
+        .all()
+    )
+    scored = []
+    for other in others:
+        try:
+            vec = json.loads(other.embedding)
+        except (TypeError, ValueError):
+            continue
+        scored.append((cosine_similarity(my_vec, vec), other))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # 0.75 is a fairly high bar — this is meant to surface genuinely related
+    # reading, not every article that's loosely in the same technical area.
+    related = [a for score, a in scored[:top_k] if score >= 0.75]
+    article.related_articles = json.dumps([{"id": a.id, "title": a.title, "url": a.url} for a in related])
+    db.commit()
 
 def _generate_tags(article: "models.Article", llm_engine, ollama_model, api_key, db: Session):
     """Extracts 3-6 concept tags (e.g. "kubernetes", "rbac", "incident-response")
@@ -485,6 +604,7 @@ def like_item(req: UrlRequest, db: Session = Depends(get_db)):
 
     settings = db.query(models.Settings).first()
     llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+    memory_context = _get_memory_context(db)
 
     prompt = f"""You are an SRE AI assistant taking personal notes on behalf of the user, who just liked this {article.source} item titled "{article.title}".
 Write structured personal notes in Markdown with these sections:
@@ -493,8 +613,8 @@ Write structured personal notes in Markdown with these sections:
 ## Notable Quotes / Highlights
 (direct quotes or standout moments, if any are identifiable)
 ## Action Items
-(concrete things an SRE/DevOps engineer could try or investigate based on this)
-
+(concrete things an SRE/DevOps engineer could try or investigate based on this{', tailored to what you know about the user below' if memory_context else ''})
+{f"{chr(10)}What you already know about this user, from past activity:{chr(10)}{memory_context}{chr(10)}" if memory_context else ""}
 Base your notes only on the following content:
 
 {article.content[:15000]}"""
@@ -550,6 +670,134 @@ def _search_vault(query: str, settings, db: Session, top_k: int = 5):
         scored.append((cosine_similarity(query_vec, vec), a))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [a for score, a in scored[:max(1, min(top_k, 20))] if score > 0]
+
+_MAX_STORED_MEMORIES = 20
+
+def _get_memory_context(db: Session, limit: int = 10) -> str:
+    """Formats accumulated agent memory as a context block for prompts.
+    Marks the returned rows as just-used (last_used_at) so /memory can
+    surface which observations are actually influencing agent output vs.
+    which have gone stale — a form of the "transparency" half of the
+    human-oversight pattern (you can always see and delete what the agent
+    thinks it knows about you)."""
+    memories = db.query(models.AgentMemory).order_by(models.AgentMemory.created_at.desc()).limit(limit).all()
+    if not memories:
+        return ""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for m in memories:
+        m.last_used_at = now
+    db.commit()
+    return "\n".join(f"- [{m.category}] {m.content}" for m in memories)
+
+def _synthesize_memory(db: Session, llm_engine, ollama_model, api_key, db_settings=None) -> list:
+    """Called by the reflect loop: looks at accumulated activity (liked
+    articles/tags, quiz performance, goal progress) and distills it into a
+    small number of durable observations about the user — the kind of
+    thing a colleague who'd worked with you a while would just *know*,
+    rather than something that needs re-deriving every conversation."""
+    import json, re as _re
+    from llm_client import llm
+
+    liked = db.query(models.Article).filter(models.Article.liked.is_(True)).order_by(models.Article.created_at.desc()).limit(30).all()
+    if not liked:
+        return []
+
+    tag_counts: dict = {}
+    for a in liked:
+        try:
+            for t in (json.loads(a.tags) if a.tags else []):
+                tag_counts[t] = tag_counts.get(t, 0) + 1
+        except (TypeError, ValueError):
+            continue
+    top_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:15]
+
+    total_quiz = db.query(models.QuizQuestion).count()
+    reviewed_quiz = db.query(models.QuizQuestion).filter(models.QuizQuestion.review_count > 0).count()
+    active_goals = db.query(models.LearningGoal).filter(models.LearningGoal.status == "active").count()
+    completed_goals = db.query(models.LearningGoal).filter(models.LearningGoal.status == "completed").count()
+
+    existing = [m.content for m in db.query(models.AgentMemory).all()]
+
+    prompt = f"""Based on this user's activity, write up to 3 short, durable observations (facts or patterns) about them that would be genuinely useful context for an AI assistant helping them in future — the kind of thing worth remembering long-term, not a summary of today.
+
+Most-tagged topics across {len(liked)} liked items: {', '.join(f'{t} ({c})' for t, c in top_tags) or 'none yet'}
+Recall quiz engagement: {reviewed_quiz}/{total_quiz} questions ever reviewed
+Learning goals: {active_goals} active, {completed_goals} completed
+
+Observations already on file (don't repeat these, only add genuinely new ones — return [] if nothing new stands out):
+{chr(10).join(f'- {e}' for e in existing) or '(none yet)'}
+
+Return ONLY valid JSON: [{{"category": "preference"|"pattern"|"fact", "content": "one sentence"}}] or []"""
+
+    try:
+        raw = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+        match = _re.search(r'\[[\s\S]*\]', raw)
+        if not match:
+            return []
+        items = json.loads(match.group())
+    except Exception as e:
+        logging.getLogger("main").warning("Memory synthesis failed: %s", e)
+        return []
+
+    # Telling the LLM "don't repeat yourself" in the prompt isn't reliable
+    # on its own — confirmed empirically, it tends to re-cover the same
+    # ground in fresh wording each run rather than converging. Semantic
+    # similarity (same embeddings used for vault search/auto-linking)
+    # catches "differently worded but same observation" far better than
+    # text-level diffing; fall back to fuzzy text matching only if no
+    # embedding provider is configured.
+    from llm_client import embed_texts, cosine_similarity
+    candidates = [(item.get("category", "pattern"), (item.get("content") or "").strip()) for item in items[:3]]
+    candidates = [(cat, content) for cat, content in candidates if content]
+
+    existing_vecs = None
+    if existing and candidates:
+        existing_vecs = embed_texts(existing, db_settings)
+
+    created = []
+    for category, content in candidates:
+        is_duplicate = False
+        if existing_vecs:
+            content_vec = embed_texts([content], db_settings)
+            if content_vec:
+                is_duplicate = any(cosine_similarity(content_vec[0], v) >= 0.85 for v in existing_vecs)
+        else:
+            is_duplicate = any(difflib.SequenceMatcher(None, content.lower(), e.lower()).ratio() >= 0.6 for e in existing)
+
+        if is_duplicate:
+            continue
+        m = models.AgentMemory(category=category, content=content)
+        db.add(m)
+        created.append(m)
+    db.commit()
+
+    # Keep the memory store small and current rather than growing forever —
+    # drop the oldest, least-recently-referenced entries past the cap.
+    overflow = db.query(models.AgentMemory).count() - _MAX_STORED_MEMORIES
+    if overflow > 0:
+        stale = (
+            db.query(models.AgentMemory)
+            .order_by(models.AgentMemory.last_used_at.asc().nulls_first(), models.AgentMemory.created_at.asc())
+            .limit(overflow)
+            .all()
+        )
+        for m in stale:
+            db.delete(m)
+        db.commit()
+
+    for m in created:
+        db.refresh(m)
+    return created
+
+@app.get("/memory")
+def get_memory(db: Session = Depends(get_db)):
+    return db.query(models.AgentMemory).order_by(models.AgentMemory.created_at.desc()).all()
+
+@app.delete("/memory/{memory_id}")
+def delete_memory(memory_id: int, db: Session = Depends(get_db)):
+    db.query(models.AgentMemory).filter(models.AgentMemory.id == memory_id).delete()
+    db.commit()
+    return {"message": "Forgotten."}
 
 @app.post("/ask")
 def ask_vault(req: AskRequest, db: Session = Depends(get_db)):
@@ -617,6 +865,190 @@ def reindex_vault(background_tasks: BackgroundTasks, db: Session = Depends(get_d
     background_tasks.add_task(_reindex)
     return {"message": f"Reindexing {pending_embeddings} embedding(s) and {pending_tags} tag set(s) in the background."}
 
+@app.post("/agent/reflect")
+def agent_reflect(db: Session = Depends(get_db)):
+    """The ambient/always-on side of this app: an agentic loop meant to be
+    triggered periodically (e.g. a weekly cron) rather than by direct user
+    request. It looks at what you've recently liked and tagged, and:
+      1. proposes NEW learning goals for themes that keep recurring but
+         aren't covered by an active goal yet, and
+      2. flags "open loops" — things you liked (signalling real interest)
+         but never actually revisited via the recall quiz.
+    Following the ambient-agent "Notify vs Review" pattern: it never
+    creates goals or modifies anything on its own — it only proposes
+    AgentSuggestion rows that a human reviews and explicitly accepts or
+    dismisses in the UI.
+    """
+    import json
+    from llm_client import llm, resolve_llm_config
+
+    settings = db.query(models.Settings).first()
+    llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    three_days_ago = now - datetime.timedelta(days=3)
+    two_weeks_ago = now - datetime.timedelta(days=14)
+
+    # Open-loop detection deliberately has NO lower bound on age — a note
+    # liked 2 months ago and never revisited is if anything a more overdue
+    # loop than one liked last week, not something to age out of view.
+    liked_older_than_3_days = (
+        db.query(models.Article)
+        .filter(models.Article.liked.is_(True), models.Article.created_at <= three_days_ago)
+        .all()
+    )
+    # The theme/new-goal synthesis is a recency signal instead ("what are
+    # you currently drawn to"), so that part stays windowed to 2 weeks.
+    recent_liked = [a for a in liked_older_than_3_days if a.created_at and a.created_at.replace(tzinfo=datetime.timezone.utc) >= two_weeks_ago]
+
+    active_goal_titles = [g.title for g in db.query(models.LearningGoal).filter(models.LearningGoal.status == "active").all()]
+
+    def already_suggested(title: str) -> bool:
+        return db.query(models.AgentSuggestion).filter(
+            models.AgentSuggestion.title == title,
+            models.AgentSuggestion.status.in_(["pending", "accepted"]),
+        ).first() is not None
+
+    created = []
+
+    # ── Open loops: liked (real signal of interest) but never reviewed ──
+    # This is a deterministic DB check, not an LLM judgment call — more
+    # reliable than asking the model to guess what counts as "neglected".
+    for article in liked_older_than_3_days:
+        reviewed = db.query(models.QuizQuestion).filter(
+            models.QuizQuestion.article_id == article.id,
+            models.QuizQuestion.review_count > 0,
+        ).first()
+        if reviewed:
+            continue
+        title = f"Revisit: {article.title}"[:200]
+        if already_suggested(title):
+            continue
+        s = models.AgentSuggestion(
+            type="open_loop",
+            title=title,
+            description=f"You liked this on {article.created_at.strftime('%b %d') if article.created_at else 'recently'} but haven't reviewed its recall questions yet.",
+            payload=json.dumps({"article_id": article.id, "url": article.url}),
+        )
+        db.add(s)
+        created.append(s)
+
+    # ── Emerging themes → new goal proposals (this part genuinely benefits
+    # from LLM synthesis — spotting a pattern across many tag sets isn't a
+    # simple DB query). ──
+    if recent_liked:
+        tag_lines = []
+        for a in recent_liked:
+            try:
+                tags = json.loads(a.tags) if a.tags else []
+            except (TypeError, ValueError):
+                tags = []
+            if tags:
+                tag_lines.append(f"- {a.title}: {', '.join(tags)}")
+        if tag_lines:
+            prompt = f"""Here are things the user liked/saved in the last two weeks, with their extracted concept tags:
+{chr(10).join(tag_lines)}
+
+Their current active learning goals are: {', '.join(active_goal_titles) or '(none)'}
+
+If there's a clear recurring theme across at least 2-3 of the liked items that ISN'T already covered by an existing goal, propose ONE new learning goal for it. If nothing stands out as a genuine pattern, return an empty array — don't force a suggestion.
+Return ONLY valid JSON: [{{"title": "short goal title", "description": "1-2 sentence why, referencing what they saved"}}] or []"""
+            try:
+                raw = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+                import re as _re
+                match = _re.search(r'\[[\s\S]*\]', raw)
+                if match:
+                    for item in json.loads(match.group())[:2]:
+                        title = (item.get("title") or "").strip()
+                        if not title or already_suggested(title) or title in active_goal_titles:
+                            continue
+                        s = models.AgentSuggestion(
+                            type="new_goal",
+                            title=title,
+                            description=item.get("description", ""),
+                            payload=json.dumps({"title": title, "description": item.get("description", "")}),
+                        )
+                        db.add(s)
+                        created.append(s)
+            except Exception as e:
+                logging.getLogger("main").warning("Reflect theme synthesis failed: %s", e)
+
+    db.commit()
+    for s in created:
+        db.refresh(s)
+
+    # This is also where long-term memory gets updated — the reflect loop
+    # is the one place that already looks at activity in aggregate rather
+    # than one request at a time, so it's the natural place to distill
+    # "what have I learned about this user" rather than doing it inline on
+    # every single agent call.
+    new_memories = _synthesize_memory(db, llm_engine, ollama_model, api_key, settings)
+
+    # Notify (not review/act) — a lightweight heads-up if a webhook is
+    # configured, same channel as the discovery digest.
+    if created and settings and settings.webhook_url:
+        lines = [f"🧠 Weekly Reflection — {len(created)} new suggestion(s):"]
+        for s in created:
+            lines.append(f"- [{s.type}] {s.title}")
+        message = "\n".join(lines)
+        try:
+            requests.post(settings.webhook_url, json={"text": message, "content": message}, timeout=10)
+        except Exception as e:
+            logging.getLogger("main").warning("Reflect webhook notify failed: %s", e)
+
+    return {"created": len(created), "suggestions": created, "new_memories": len(new_memories)}
+
+@app.get("/suggestions")
+def get_suggestions(status: str = "pending", db: Session = Depends(get_db)):
+    return (
+        db.query(models.AgentSuggestion)
+        .filter(models.AgentSuggestion.status == status)
+        .order_by(models.AgentSuggestion.created_at.desc())
+        .all()
+    )
+
+class SuggestionAction(BaseModel):
+    action: str  # "accept" | "dismiss"
+
+@app.post("/suggestions/{suggestion_id}/action")
+def act_on_suggestion(suggestion_id: int, req: SuggestionAction, db: Session = Depends(get_db)):
+    import json
+    s = db.query(models.AgentSuggestion).filter(models.AgentSuggestion.id == suggestion_id).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    if req.action == "dismiss":
+        s.status = "dismissed"
+        db.commit()
+        return {"status": "dismissed"}
+
+    if req.action != "accept":
+        raise HTTPException(status_code=400, detail="action must be 'accept' or 'dismiss'")
+
+    payload = json.loads(s.payload) if s.payload else {}
+    if s.type == "new_goal":
+        goal = models.LearningGoal(title=payload.get("title", s.title), description=payload.get("description", s.description))
+        db.add(goal)
+        s.status = "accepted"
+        db.commit()
+        db.refresh(goal)
+        return {"status": "accepted", "goal_id": goal.id}
+
+    if s.type == "open_loop":
+        # "Accepting" a revisit nudge means: make its quiz questions due
+        # again right now, so it surfaces at the top of /quiz/due.
+        now = datetime.datetime.now(datetime.timezone.utc)
+        db.query(models.QuizQuestion).filter(
+            models.QuizQuestion.article_id == payload.get("article_id")
+        ).update({"next_review_at": now})
+        s.status = "accepted"
+        db.commit()
+        return {"status": "accepted"}
+
+    s.status = "accepted"
+    db.commit()
+    return {"status": "accepted"}
+
 @app.get("/cves")
 def get_cves(limit: int = 50, db: Session = Depends(get_db)):
     limit = max(1, min(limit, 200))
@@ -648,8 +1080,9 @@ def run_research_agent(req: PromptRequest, db: Session = Depends(get_db)):
     vault_context = "\n\n".join(
         f"### {a.title}\n{(a.notes or a.summary or '')[:1500]}" for a in relevant
     )
+    memory_context = _get_memory_context(db)
 
-    response = research_agent.research(req.prompt, llm_engine, ollama_model, api_key, vault_context)
+    response = research_agent.research(req.prompt, llm_engine, ollama_model, api_key, vault_context, memory_context)
 
     article = models.Article(
         title=f"Research: {req.prompt}"[:200],
@@ -785,6 +1218,17 @@ class StepToggle(BaseModel):
 class GenerateGoalRequest(BaseModel):
     topic: str
 
+def _serialize_step(s: "models.LearningStep") -> dict:
+    import json
+    try:
+        resources = json.loads(s.resources) if s.resources else []
+    except (TypeError, ValueError):
+        resources = []
+    return {
+        "id": s.id, "title": s.title, "description": s.description,
+        "completed": s.completed, "order_index": s.order_index, "resources": resources,
+    }
+
 @app.get("/goals")
 def get_goals(db: Session = Depends(get_db)):
     goals = db.query(models.LearningGoal).order_by(models.LearningGoal.created_at.desc()).all()
@@ -795,7 +1239,7 @@ def get_goals(db: Session = Depends(get_db)):
             "id": g.id, "title": g.title, "description": g.description,
             "progress": g.progress, "status": g.status, "color": g.color,
             "created_at": str(g.created_at),
-            "steps": [{"id": s.id, "title": s.title, "description": s.description, "completed": s.completed, "order_index": s.order_index} for s in steps]
+            "steps": [_serialize_step(s) for s in steps]
         })
     return result
 
@@ -833,13 +1277,20 @@ Include exactly 5 steps."""
         db.commit()
         db.refresh(goal)
         
+        from collector import find_learning_resources
+
         saved_steps = []
         for i, step in enumerate(data.get("steps", [])[:5]):
-            s = models.LearningStep(goal_id=goal.id, title=step["title"], description=step.get("description", ""), order_index=i)
+            resources = find_learning_resources(f"{data['title']} {step['title']}")
+            s = models.LearningStep(
+                goal_id=goal.id, title=step["title"], description=step.get("description", ""),
+                order_index=i, resources=json.dumps(resources),
+            )
             db.add(s)
-            saved_steps.append({"id": 0, "title": step["title"], "description": step.get("description", ""), "completed": False, "order_index": i})
-        db.commit()
-        
+            db.commit()
+            db.refresh(s)
+            saved_steps.append(_serialize_step(s))
+
         return {"id": goal.id, "title": goal.title, "description": goal.description, "progress": 0, "status": "active", "color": "#8b5cf6", "steps": saved_steps}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
@@ -870,7 +1321,27 @@ def add_step(goal_id: int, req: StepCreate, db: Session = Depends(get_db)):
     db.add(step)
     db.commit()
     db.refresh(step)
-    return {"id": step.id, "title": step.title, "completed": step.completed}
+    return _serialize_step(step)
+
+@app.post("/goals/{goal_id}/steps/{step_id}/find-resources")
+def find_step_resources(goal_id: int, step_id: int, db: Session = Depends(get_db)):
+    """On-demand resource search for a single step — used both to refresh
+    weak auto-generated results and to backfill resources for steps that
+    were added manually (which don't get searched automatically, to keep
+    'add a quick step' snappy)."""
+    import json
+    from collector import find_learning_resources
+
+    step = db.query(models.LearningStep).filter(models.LearningStep.id == step_id, models.LearningStep.goal_id == goal_id).first()
+    if not step:
+        raise HTTPException(status_code=404, detail="Step not found")
+
+    goal = db.query(models.LearningGoal).filter(models.LearningGoal.id == goal_id).first()
+    query = f"{goal.title} {step.title}" if goal else step.title
+    resources = find_learning_resources(query)
+    step.resources = json.dumps(resources)
+    db.commit()
+    return _serialize_step(step)
 
 @app.put("/steps/{step_id}")
 def toggle_step(step_id: int, req: StepToggle, db: Session = Depends(get_db)):

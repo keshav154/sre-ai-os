@@ -1,8 +1,10 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
+import { apiFetch } from '@/lib/api'
 import {
   GraduationCap, Target, Sparkles, Plus, Trash2, CheckCircle2, Circle,
-  Clock, Calendar, BarChart2, ChevronDown, ChevronUp, Loader2, Trophy, BookOpen, Bell, AlarmClock, Repeat
+  Clock, Calendar, BarChart2, ChevronDown, ChevronUp, Loader2, Trophy, BookOpen, Bell, AlarmClock, Repeat,
+  Search, ExternalLink
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell
@@ -11,12 +13,19 @@ import {
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899']
 
+interface Resource {
+  title: string
+  url: string
+  source: string
+}
+
 interface Step {
   id: number
   title: string
   description?: string
   completed: boolean
   order_index: number
+  resources?: Resource[]
 }
 
 interface Goal {
@@ -78,8 +87,8 @@ export default function LearningPath() {
     setLoading(true)
     try {
       const [gRes, tRes] = await Promise.all([
-        fetch(`${API}/goals`).then(r => r.json()),
-        fetch(`${API}/time-logs`).then(r => r.json()),
+        apiFetch(`${API}/goals`).then(r => r.json()),
+        apiFetch(`${API}/time-logs`).then(r => r.json()),
       ])
       setGoals(gRes)
       setTimeLogs(tRes)
@@ -93,7 +102,7 @@ export default function LearningPath() {
   const createGoal = async () => {
     if (!newGoalTitle.trim()) return
     const color = COLORS[goals.length % COLORS.length]
-    await fetch(`${API}/goals`, {
+    await apiFetch(`${API}/goals`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: newGoalTitle, description: newGoalDesc, color })
@@ -103,12 +112,12 @@ export default function LearningPath() {
   }
 
   const deleteGoal = async (id: number) => {
-    await fetch(`${API}/goals/${id}`, { method: 'DELETE' })
+    await apiFetch(`${API}/goals/${id}`, { method: 'DELETE' })
     fetchAll()
   }
 
   const toggleStep = async (stepId: number, completed: boolean) => {
-    await fetch(`${API}/steps/${stepId}`, {
+    await apiFetch(`${API}/steps/${stepId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ completed })
@@ -120,7 +129,7 @@ export default function LearningPath() {
     const text = newStepTexts[goalId]?.trim()
     if (!text) return
     const steps = goals.find(g => g.id === goalId)?.steps || []
-    await fetch(`${API}/goals/${goalId}/steps`, {
+    await apiFetch(`${API}/goals/${goalId}/steps`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ goal_id: goalId, title: text, order_index: steps.length })
@@ -129,11 +138,21 @@ export default function LearningPath() {
     fetchAll()
   }
 
+  const [findingResourcesFor, setFindingResourcesFor] = useState<number | null>(null)
+  const findResources = async (goalId: number, stepId: number) => {
+    setFindingResourcesFor(stepId)
+    try {
+      await apiFetch(`${API}/goals/${goalId}/steps/${stepId}/find-resources`, { method: 'POST' })
+      fetchAll()
+    } catch (e) { console.error(e) }
+    setFindingResourcesFor(null)
+  }
+
   const generatePath = async () => {
     if (!generateTopic.trim()) return
     setGenerating(true)
     try {
-      const res = await fetch(`${API}/goals/ai-generate`, {
+      const res = await apiFetch(`${API}/goals/ai-generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic: generateTopic })
@@ -156,7 +175,7 @@ export default function LearningPath() {
     if (!logMinutes || isNaN(Number(logMinutes))) return
     setSavingLog(true)
     const goal = goals.find(g => g.id === Number(logGoalId))
-    await fetch(`${API}/time-logs`, {
+    await apiFetch(`${API}/time-logs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -173,7 +192,7 @@ export default function LearningPath() {
   }
 
   const deleteLog = async (id: number) => {
-    await fetch(`${API}/time-logs/${id}`, { method: 'DELETE' })
+    await apiFetch(`${API}/time-logs/${id}`, { method: 'DELETE' })
     fetchAll()
   }
 
@@ -283,7 +302,7 @@ export default function LearningPath() {
             {/* AI Generate */}
             <div className="bg-zinc-900 border border-violet-900/40 rounded-xl p-5">
               <h2 className="font-bold text-lg mb-1 flex items-center gap-2"><Sparkles className="text-violet-400 w-5 h-5" /> AI Generate Roadmap</h2>
-              <p className="text-xs text-zinc-500 mb-4">Type a topic and your AI engine will generate a structured 5-step learning roadmap automatically.</p>
+              <p className="text-xs text-zinc-500 mb-4">Type a topic and your AI engine will generate a structured 5-step learning roadmap, then search the web for real resources for each step. Takes under a minute.</p>
               <input
                 value={generateTopic}
                 onChange={e => setGenerateTopic(e.target.value)}
@@ -367,11 +386,36 @@ export default function LearningPath() {
                               ? <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                               : <Circle className="w-5 h-5 text-zinc-600 group-hover:text-zinc-400" />}
                           </button>
-                          <div>
+                          <div className="flex-1 min-w-0">
                             <p className={`font-semibold text-sm ${step.completed ? 'line-through text-zinc-600' : 'text-zinc-200'}`}>
                               {idx + 1}. {step.title}
                             </p>
                             {step.description && <p className="text-xs text-zinc-500 mt-0.5">{step.description}</p>}
+
+                            {step.resources && step.resources.length > 0 ? (
+                              <div className="mt-2 space-y-1">
+                                {step.resources.map((r, ri) => (
+                                  <a
+                                    key={ri}
+                                    href={r.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 hover:underline truncate"
+                                  >
+                                    <ExternalLink className="w-3 h-3 flex-shrink-0" /> {r.title}
+                                  </a>
+                                ))}
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => findResources(goal.id, step.id)}
+                                disabled={findingResourcesFor === step.id}
+                                className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-yellow-400 disabled:opacity-50 mt-2 cursor-pointer"
+                              >
+                                <Search className={`w-3 h-3 ${findingResourcesFor === step.id ? 'animate-spin' : ''}`} />
+                                {findingResourcesFor === step.id ? 'Searching...' : 'Find resources'}
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}

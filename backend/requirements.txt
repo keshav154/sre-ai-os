@@ -11,6 +11,7 @@ youtube-search
 openai
 anthropic
 google-generativeai
-duckduckgo-search
+ddgs
 psycopg2-binary
 PyGithub
+PyJWT

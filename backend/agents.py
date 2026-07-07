@@ -13,16 +13,19 @@ class ResearchAgent(SREAgent):
     def __init__(self):
         super().__init__("Research Agent", "You are an SRE Research AI. Summarize the user's topic and extract actionable insights. Return in Markdown format.")
 
-    def research(self, topic: str, llm_engine: str = "ollama", ollama_model: str = "llama3:latest", api_key: str = None, vault_context: str = "") -> str:
+    def research(self, topic: str, llm_engine: str = "ollama", ollama_model: str = "llama3:latest", api_key: str = None, vault_context: str = "", memory_context: str = "") -> str:
+        request = f"Research and provide an executive summary on {topic}."
         if vault_context:
-            request = (
-                f"Research and provide an executive summary on {topic}.\n\n"
-                f"The user has already saved these related notes in their personal vault — ground your "
+            request += (
+                f"\n\nThe user has already saved these related notes in their personal vault — ground your "
                 f"research in them where relevant and note where they add useful first-hand context, "
                 f"but also bring in your own broader knowledge of the topic:\n\n{vault_context}"
             )
-        else:
-            request = f"Research and provide an executive summary on {topic}."
+        if memory_context:
+            request += (
+                f"\n\nWhat you already know about this user from past activity — use it to judge what depth "
+                f"or angle would actually be useful to them, don't just restate it:\n\n{memory_context}"
+            )
         return self.run(request, llm_engine, ollama_model, api_key)
 
 class RunbookAgent(SREAgent):

@@ -2,6 +2,14 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Float, Boolean
 from sqlalchemy.sql import func
 from database import Base
 
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    password_hash = Column(String)
+    password_salt = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 class Article(Base):
     __tablename__ = "articles"
     id = Column(Integer, primary_key=True, index=True)
@@ -18,6 +26,7 @@ class Article(Base):
     notes = Column(Text, nullable=True)  # AI-generated personal notes for liked items (distinct from the generic `summary`)
     embedding = Column(Text, nullable=True)  # JSON-encoded float vector for semantic search (RAG over the vault)
     tags = Column(Text, nullable=True)  # JSON-encoded list of LLM-extracted concept tags, used to build the knowledge graph
+    related_articles = Column(Text, nullable=True)  # JSON-encoded [{id,title,url}] of the most similar other saved articles (auto-linked from embeddings)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Settings(Base):
@@ -68,6 +77,7 @@ class LearningStep(Base):
     description = Column(Text, nullable=True)
     completed = Column(Boolean, default=False)
     order_index = Column(Integer, default=0)
+    resources = Column(Text, nullable=True)  # JSON-encoded [{title,url,source}] — where to actually learn this step from
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class QuizQuestion(Base):
@@ -83,6 +93,29 @@ class QuizQuestion(Base):
     review_count = Column(Integer, default=0)
     next_review_at = Column(DateTime(timezone=True), server_default=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class AgentSuggestion(Base):
+    __tablename__ = "agent_suggestions"
+    id = Column(Integer, primary_key=True, index=True)
+    type = Column(String)  # 'new_goal' | 'open_loop' | 'theme'
+    title = Column(String)
+    description = Column(Text, nullable=True)
+    payload = Column(Text, nullable=True)  # JSON-encoded extra data (e.g. proposed goal steps, article ids)
+    status = Column(String, default="pending")  # pending | accepted | dismissed
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class AgentMemory(Base):
+    """Long-term memory the agents accumulate about the user's interests
+    and habits over time (distinct from the vault RAG, which is about
+    saved *content* — this is about observed *patterns*), synthesized
+    periodically by the reflect loop and injected into agent prompts so
+    they build on prior understanding instead of starting cold every call."""
+    __tablename__ = "agent_memory"
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(String, default="pattern")  # 'preference' | 'pattern' | 'fact'
+    content = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
 
 class TimeLog(Base):
     __tablename__ = "time_logs"

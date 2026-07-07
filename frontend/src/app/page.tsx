@@ -1,8 +1,9 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
+import { apiFetch } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, Activity, Zap, RefreshCw, Terminal, CheckCircle2, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText } from "lucide-react"
+import { BookOpen, Activity, Zap, RefreshCw, Terminal, CheckCircle2, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check } from "lucide-react"
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -30,6 +31,9 @@ export default function Dashboard() {
   const [agentInput, setAgentInput] = useState('')
   const [agentRunning, setAgentRunning] = useState(false)
   const [agentResult, setAgentResult] = useState('')
+  const [suggestions, setSuggestions] = useState<any[]>([])
+  const [reflecting, setReflecting] = useState(false)
+  const [actingOn, setActingOn] = useState<number | null>(null)
   const itemsPerPage = 12
 
   const showToast = (msg: string, type: 'error' | 'success' = 'error') => {
@@ -166,7 +170,7 @@ export default function Dashboard() {
 
   const fetchSavedArticles = async () => {
     try {
-      const res = await fetch(`${API}/articles?limit=100`)
+      const res = await apiFetch(`${API}/articles?limit=100`)
       const data = await res.json()
       setSavedArticles(data)
     } catch (e) { console.error(e) }
@@ -178,7 +182,7 @@ export default function Dashboard() {
     setSearching(true)
     const handle = setTimeout(async () => {
       try {
-        const res = await fetch(`${API}/articles?q=${encodeURIComponent(savedSearch.trim())}&limit=200`)
+        const res = await apiFetch(`${API}/articles?q=${encodeURIComponent(savedSearch.trim())}&limit=200`)
         const data = await res.json()
         setSavedSearchResults(data)
       } catch (e) { console.error(e) }
@@ -189,7 +193,7 @@ export default function Dashboard() {
 
   const fetchGoals = async () => {
     try {
-      const res = await fetch(`${API}/goals`)
+      const res = await apiFetch(`${API}/goals`)
       const data = await res.json()
       setGoals(data.filter((g: any) => g.status === 'active'))
     } catch (e) { console.error(e) }
@@ -197,7 +201,7 @@ export default function Dashboard() {
 
   const fetchCves = async () => {
     try {
-      const res = await fetch(`${API}/cves`)
+      const res = await apiFetch(`${API}/cves`)
       setCves(await res.json())
     } catch (e) { console.error(e) }
   }
@@ -205,7 +209,7 @@ export default function Dashboard() {
   const handleRefreshCves = async () => {
     setRefreshingCves(true)
     try {
-      await fetch(`${API}/cves/refresh`, { method: 'POST' })
+      await apiFetch(`${API}/cves/refresh`, { method: 'POST' })
       showToast('Fetching recent CVEs in the background — check back in a moment.', 'success')
       // The refresh runs server-side in the background (NVD is rate-limited),
       // so poll once after a delay rather than blocking on it here.
@@ -216,11 +220,57 @@ export default function Dashboard() {
     setRefreshingCves(false)
   }
 
+  const fetchSuggestions = async () => {
+    try {
+      const res = await apiFetch(`${API}/suggestions`)
+      setSuggestions(await res.json())
+    } catch (e) { console.error(e) }
+  }
+
+  const handleReflectNow = async () => {
+    setReflecting(true)
+    try {
+      const res = await apiFetch(`${API}/agent/reflect`, { method: 'POST' })
+      const data = await res.json()
+      if (data.created > 0) {
+        showToast(`Found ${data.created} new suggestion(s).`, 'success')
+        fetchSuggestions()
+      } else {
+        showToast('Nothing new to suggest right now — all caught up.', 'success')
+      }
+    } catch (e) {
+      showToast('Failed to run the reflect agent.')
+    }
+    setReflecting(false)
+  }
+
+  const handleSuggestionAction = async (s: any, action: 'accept' | 'dismiss') => {
+    setActingOn(s.id)
+    try {
+      const res = await apiFetch(`${API}/suggestions/${s.id}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      })
+      if (!res.ok) throw new Error()
+      setSuggestions(prev => prev.filter(x => x.id !== s.id))
+      if (action === 'accept' && s.type === 'new_goal') {
+        showToast(`Created goal "${s.title}" — check Learning Path.`, 'success')
+        fetchGoals()
+      } else if (action === 'accept' && s.type === 'open_loop') {
+        showToast('Added back to your recall quiz queue.', 'success')
+      }
+    } catch (e) {
+      showToast('Failed to update suggestion')
+    }
+    setActingOn(null)
+  }
+
   const attachToGoal = async (item: any, goalId: string) => {
     if (!goalId) return
     const goal = goals.find(g => g.id === Number(goalId))
     try {
-      const res = await fetch(`${API}/goals/${goalId}/steps`, {
+      const res = await apiFetch(`${API}/goals/${goalId}/steps`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -242,6 +292,7 @@ export default function Dashboard() {
     fetchSavedArticles()
     fetchGoals()
     fetchCves()
+    fetchSuggestions()
     const cachedFeed = localStorage.getItem('liveFeed')
     if (cachedFeed) {
       try { setLiveFeed(JSON.parse(cachedFeed)) } catch {}
@@ -254,7 +305,7 @@ export default function Dashboard() {
     setDiscovering(true)
     localStorage.removeItem('liveFeed')
     try {
-      const res = await fetch(`${API}/discover${force ? '?force=true' : ''}`)
+      const res = await apiFetch(`${API}/discover${force ? '?force=true' : ''}`)
       const data = await res.json()
       setLiveFeed(data)
       setCurrentPage(1)
@@ -266,7 +317,7 @@ export default function Dashboard() {
   const handleSummarize = async (targetUrl: string) => {
     setProcessingAction({ url: targetUrl, action: 'summarize' })
     try {
-      const res = await fetch(`${API}/summarize`, {
+      const res = await apiFetch(`${API}/summarize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl })
@@ -283,7 +334,7 @@ export default function Dashboard() {
   const handleSaveToVault = async (targetUrl: string) => {
     setProcessingAction({ url: targetUrl, action: 'save' })
     try {
-      const res = await fetch(`${API}/save-to-vault`, {
+      const res = await apiFetch(`${API}/save-to-vault`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl })
@@ -302,7 +353,7 @@ export default function Dashboard() {
   const handleLike = async (targetUrl: string) => {
     setProcessingAction({ url: targetUrl, action: 'like' })
     try {
-      const res = await fetch(`${API}/like`, {
+      const res = await apiFetch(`${API}/like`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl })
@@ -332,7 +383,7 @@ export default function Dashboard() {
     setAgentResult('')
     try {
       const endpoint = agentMode === 'research' ? '/agent/research' : '/agent/runbook'
-      const res = await fetch(`${API}${endpoint}`, {
+      const res = await apiFetch(`${API}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: agentInput.trim() })
@@ -525,6 +576,45 @@ export default function Dashboard() {
     )
   }
 
+  // Card for an item in "My Saved Vault". Separate from FeedCard since
+  // saved articles carry different fields (no timestamp/thumbnail, but do
+  // have `related_articles` — the auto-linked notes the app found for you).
+  const SavedItemCard = ({ item }: { item: any }) => (
+    <div
+      onClick={() => openSavedItem(item)}
+      className="flex items-start gap-3 p-4 bg-zinc-950 rounded-lg border border-zinc-800 hover:border-blue-800/50 transition-colors cursor-pointer group"
+    >
+      <div className="flex-1 min-w-0">
+        <span className="text-xs font-bold px-2 py-0.5 rounded-md mb-2 inline-block bg-blue-500/20 text-blue-400">{item.source || 'Web'}</span>
+        {item.liked && <Heart className="inline w-3 h-3 fill-pink-400 text-pink-400 mb-2 ml-1.5" />}
+        <h3 className="font-semibold text-sm group-hover:text-blue-400 transition-colors mb-1 line-clamp-1">{item.title}</h3>
+        <p className="text-zinc-500 text-xs line-clamp-2">{item.summary}</p>
+        {item.related_articles && (() => {
+          let related: any[] = []
+          try { related = JSON.parse(item.related_articles) } catch {}
+          if (!related.length) return null
+          return (
+            <div onClick={e => e.stopPropagation()} className="mt-2 pt-2 border-t border-zinc-800/70 flex flex-wrap gap-1">
+              <span className="text-[10px] text-zinc-600 mr-1">🔗 Related:</span>
+              {related.map((r: any) => (
+                <a
+                  key={r.id}
+                  href={r.url?.startsWith('http') ? r.url : undefined}
+                  onClick={e => { if (!r.url?.startsWith('http')) e.preventDefault() }}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 hover:text-blue-400 truncate max-w-[140px]"
+                >
+                  {r.title}
+                </a>
+              ))}
+            </div>
+          )
+        })()}
+      </div>
+    </div>
+  )
+
   const totalUnfiltered = unviewedFeed.filter((item: any) => sourceFilter === 'All' || item.source === sourceFilter).length
 
   return (
@@ -549,15 +639,65 @@ export default function Dashboard() {
           </h1>
           <p className="text-zinc-500 mt-1 text-sm">Operational intelligence dashboard</p>
         </div>
-        <button
-          onClick={() => handleDiscover(true)}
-          disabled={discovering}
-          className="bg-emerald-700 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 text-sm font-bold transition-colors cursor-pointer disabled:opacity-50"
-        >
-          <RefreshCw className={`w-4 h-4 ${discovering ? 'animate-spin' : ''}`} />
-          {discovering ? 'Discovering...' : 'Live Search All Topics'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleReflectNow}
+            disabled={reflecting}
+            title="Run the reflection agent now — proposes new goals from recent interests and flags liked items you've never revisited"
+            className="bg-violet-800 hover:bg-violet-700 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 text-sm font-bold transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <Lightbulb className={`w-4 h-4 ${reflecting ? 'animate-pulse' : ''}`} />
+            {reflecting ? 'Reflecting...' : 'Reflect Now'}
+          </button>
+          <button
+            onClick={() => handleDiscover(true)}
+            disabled={discovering}
+            className="bg-emerald-700 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 text-sm font-bold transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${discovering ? 'animate-spin' : ''}`} />
+            {discovering ? 'Discovering...' : 'Live Search All Topics'}
+          </button>
+        </div>
       </header>
+
+      {/* Agent Suggestions inbox — proactive, human-reviewed proposals from
+          the reflect loop. Nothing here was created without a review step. */}
+      {suggestions.length > 0 && (
+        <div className="mb-8 space-y-2">
+          {suggestions.map(s => (
+            <div
+              key={s.id}
+              className="flex items-start gap-3 bg-violet-950/30 border border-violet-800/40 rounded-xl px-5 py-3.5"
+            >
+              {s.type === 'new_goal'
+                ? <Target className="w-5 h-5 text-violet-400 flex-shrink-0 mt-0.5" />
+                : <Lightbulb className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-zinc-200">
+                  {s.type === 'new_goal' ? '💡 New goal suggestion' : '🔁 Open loop'}: {s.title}
+                </p>
+                <p className="text-xs text-zinc-400 mt-0.5">{s.description}</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => handleSuggestionAction(s, 'dismiss')}
+                  disabled={actingOn === s.id}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-400 font-bold transition-colors cursor-pointer"
+                >
+                  Dismiss
+                </button>
+                <button
+                  onClick={() => handleSuggestionAction(s, 'accept')}
+                  disabled={actingOn === s.id}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-bold transition-colors cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" /> {s.type === 'new_goal' ? 'Create Goal' : 'Revisit'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* ── Left: main feed ── */}
@@ -703,38 +843,12 @@ export default function Dashboard() {
                 ) : (savedSearchResults?.length ?? 0) === 0 ? (
                   <p className="text-zinc-600 text-sm">No saved articles match "{savedSearch}".</p>
                 ) : (
-                  savedSearchResults!.map((item: any, i) => (
-                    <div
-                      key={i}
-                      onClick={() => openSavedItem(item)}
-                      className="flex items-start gap-3 p-4 bg-zinc-950 rounded-lg border border-zinc-800 hover:border-blue-800/50 transition-colors cursor-pointer group"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <span className="text-xs font-bold px-2 py-0.5 rounded-md mb-2 inline-block bg-blue-500/20 text-blue-400">{item.source || 'Web'}</span>
-                        {item.liked && <Heart className="inline w-3 h-3 fill-pink-400 text-pink-400 mb-2 ml-1.5" />}
-                        <h3 className="font-semibold text-sm group-hover:text-blue-400 transition-colors mb-1 line-clamp-1">{item.title}</h3>
-                        <p className="text-zinc-500 text-xs line-clamp-2">{item.summary}</p>
-                      </div>
-                    </div>
-                  ))
+                  savedSearchResults!.map((item: any, i) => <SavedItemCard key={i} item={item} />)
                 )
               ) : savedArticles.length === 0 ? (
                 <p className="text-zinc-600 text-sm">Your vault is empty. Summarize an article to save it.</p>
               ) : (
-                savedArticles.map((item: any, i) => (
-                  <div
-                    key={i}
-                    onClick={() => openSavedItem(item)}
-                    className="flex items-start gap-3 p-4 bg-zinc-950 rounded-lg border border-zinc-800 hover:border-blue-800/50 transition-colors cursor-pointer group"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-md mb-2 inline-block bg-blue-500/20 text-blue-400">{item.source || 'Web'}</span>
-                      {item.liked && <Heart className="inline w-3 h-3 fill-pink-400 text-pink-400 mb-2 ml-1.5" />}
-                      <h3 className="font-semibold text-sm group-hover:text-blue-400 transition-colors mb-1 line-clamp-1">{item.title}</h3>
-                      <p className="text-zinc-500 text-xs line-clamp-2">{item.summary}</p>
-                    </div>
-                  </div>
-                ))
+                savedArticles.map((item: any, i) => <SavedItemCard key={i} item={item} />)
               )}
             </div>
           </section>

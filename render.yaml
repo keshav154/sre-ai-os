@@ -11,6 +11,10 @@ services:
         sync: false
       - key: PORT
         value: 10000
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: CRON_SECRET
+        generateValue: true
 
   # Frontend Web Service
   - type: web
@@ -34,10 +38,38 @@ services:
     env: python
     schedule: "0 13 * * *"
     buildCommand: "true"
-    startCommand: "curl -sf -X POST \"$BACKEND_URL/digest/run\""
+    startCommand: "curl -sf -X POST -H \"X-Cron-Secret: $CRON_SECRET\" \"$BACKEND_URL/digest/run\""
     envVars:
       - key: BACKEND_URL
         fromService:
           type: web
           name: sre-ai-os-backend
           envVarKey: RENDER_EXTERNAL_URL
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: sre-ai-os-backend
+          envVarKey: CRON_SECRET
+
+  # Weekly reflection agent — reviews recent likes/tags, proposes new
+  # learning goals for emerging themes and flags liked-but-never-reviewed
+  # "open loops" as AgentSuggestion rows for you to accept/dismiss in the
+  # UI (it never creates/changes anything on its own). Also pings the
+  # webhook if one's configured. Same paid-plan caveat as the digest above.
+  - type: cron
+    name: sre-ai-os-reflect
+    env: python
+    schedule: "0 14 * * 1"
+    buildCommand: "true"
+    startCommand: "curl -sf -X POST -H \"X-Cron-Secret: $CRON_SECRET\" \"$BACKEND_URL/agent/reflect\""
+    envVars:
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: sre-ai-os-backend
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: sre-ai-os-backend
+          envVarKey: CRON_SECRET

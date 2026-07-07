@@ -1,8 +1,9 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
+import { apiFetch } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Network, RefreshCw, Info, MessageCircleQuestion, Send, Database } from 'lucide-react'
+import { Network, RefreshCw, Info, MessageCircleQuestion, Send, Database, Brain, X } from 'lucide-react'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -51,6 +52,27 @@ export default function KnowledgeGraph() {
   const [askStatus, setAskStatus] = useState('')
   const [reindexing, setReindexing] = useState(false)
 
+  const [memories, setMemories] = useState<any[]>([])
+  const [forgetting, setForgetting] = useState<number | null>(null)
+
+  const fetchMemories = async () => {
+    try {
+      const res = await apiFetch(`${API}/memory`)
+      setMemories(await res.json())
+    } catch (e) { console.error(e) }
+  }
+
+  const forgetMemory = async (id: number) => {
+    setForgetting(id)
+    try {
+      await apiFetch(`${API}/memory/${id}`, { method: 'DELETE' })
+      setMemories(prev => prev.filter(m => m.id !== id))
+    } catch (e) { console.error(e) }
+    setForgetting(null)
+  }
+
+  useEffect(() => { fetchMemories() }, [])
+
   const handleAsk = async () => {
     if (!question.trim()) return
     setAsking(true)
@@ -58,7 +80,7 @@ export default function KnowledgeGraph() {
     setAnswer('')
     setSources([])
     try {
-      const res = await fetch(`${API}/ask`, {
+      const res = await apiFetch(`${API}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: question.trim() })
@@ -79,7 +101,7 @@ export default function KnowledgeGraph() {
   const handleReindex = async () => {
     setReindexing(true)
     try {
-      const res = await fetch(`${API}/vault/reindex`, { method: 'POST' })
+      const res = await apiFetch(`${API}/vault/reindex`, { method: 'POST' })
       const data = await res.json()
       setAskStatus(data.message || 'Reindexing started.')
     } catch (e) {
@@ -91,7 +113,7 @@ export default function KnowledgeGraph() {
   const fetchGraph = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/graph`)
+      const res = await apiFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/graph`)
       const data = await res.json()
       setGraphData(data)
     } catch (e) {
@@ -356,6 +378,38 @@ export default function KnowledgeGraph() {
           </div>
         )}
       </div>
+
+      {/* Agent Memory — transparency into what the agents have inferred
+          about you over time from the reflect loop, with the ability to
+          delete anything you don't want it remembering. */}
+      {memories.length > 0 && (
+        <div className="bg-zinc-900 border border-amber-900/40 rounded-xl p-6">
+          <h2 className="text-xl font-bold flex items-center gap-2 mb-1">
+            <Brain className="text-amber-400 w-6 h-6" /> Agent Memory
+          </h2>
+          <p className="text-zinc-400 text-sm mb-4">
+            What the agents have learned about your interests and habits from your activity, used to inform Research Agent answers, liked-item notes, and weekly reflections. Delete anything you don't want remembered.
+          </p>
+          <div className="space-y-2">
+            {memories.map(m => (
+              <div key={m.id} className="flex items-start gap-3 bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5">
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 flex-shrink-0 mt-0.5">
+                  {m.category}
+                </span>
+                <p className="flex-1 text-sm text-zinc-300">{m.content}</p>
+                <button
+                  onClick={() => forgetMemory(m.id)}
+                  disabled={forgetting === m.id}
+                  title="Forget this"
+                  className="text-zinc-600 hover:text-red-400 disabled:opacity-50 cursor-pointer flex-shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Ask Your Vault (RAG chat) */}
       <div className="bg-zinc-900 border border-emerald-900/40 rounded-xl p-6">

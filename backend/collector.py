@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 logger = logging.getLogger("collector")
 
@@ -38,13 +38,22 @@ def ingest_url(url: str, db, summarize: bool = False):
     content = ""
     source = "Web"
     
-    # Known bot-challenge / gateway titles to reject
-    JUNK_TITLES = [
+    # Known bot-challenge / gateway phrases to reject — checked against both
+    # the page title AND a slice of the body text, since some challenge
+    # pages (e.g. reCAPTCHA interstitials) keep a normal-looking server-
+    # rendered <title> while the actual block message is in the body.
+    JUNK_PHRASES = [
         "just a moment", "access denied", "attention required", "are you human",
         "ddos protection", "checking your browser", "please wait", "cloudflare",
-        "403 forbidden", "404 not found", "error"
+        "403 forbidden", "404 not found",
+        "verify you are human", "verify you're human", "i'm not a robot", "im not a robot",
+        "unusual traffic", "detected unusual traffic", "captcha", "bot detection",
+        "suspicious activity", "robot check", "prove you're not a robot",
     ]
-    
+    # Status codes bot walls/rate limiters commonly respond with, even when
+    # the HTML body looks superficially page-shaped.
+    BLOCKED_STATUS_CODES = {403, 429, 503}
+
     if "youtube.com" in url or "youtu.be" in url:
         video_id = extract_youtube_id(url)
         if video_id:
@@ -61,13 +70,18 @@ def ingest_url(url: str, db, summarize: bool = False):
             logger.warning("Failed to fetch %s: %s", url, e)
             return {"error": f"Could not reach this URL: {e}", "status": "failed"}
 
-        # Reject Cloudflare / bot-challenge pages
-        if any(j in raw_title.lower() for j in JUNK_TITLES):
+        paragraphs = soup.find_all('p')
+        body_text = " ".join([p.get_text() for p in paragraphs])
+        body_sniff = body_text[:1500].lower()
+
+        if response.status_code in BLOCKED_STATUS_CODES:
+            return {"error": f"Blocked by bot protection (HTTP {response.status_code}). This site requires a browser to access.", "status": "blocked"}
+
+        if any(j in raw_title.lower() for j in JUNK_PHRASES) or any(j in body_sniff for j in JUNK_PHRASES):
             return {"error": f"Blocked by bot protection: '{raw_title}'. This site requires a browser to access.", "status": "blocked"}
 
         title = raw_title
-        paragraphs = soup.find_all('p')
-        content = " ".join([p.get_text() for p in paragraphs])
+        content = body_text
 
         # Reject if content is suspiciously short (bot wall with no text)
         if len(content.strip()) < 100:
@@ -172,6 +186,18 @@ def clean_html(raw_html):
     cleantext = re.sub(cleanr, '', raw_html).strip()
     return cleantext[:150] + "..." if len(cleantext) > 150 else cleantext
 
+def _title_matches_keyword(title: str, keyword: str) -> bool:
+    """YouTube search (both the scraped web UI and the official Data API)
+    is fuzzy/recommendation-influenced, not a strict keyword match — a
+    query like "SRE deep dive" can surface a completely unrelated video
+    (a TV recap, a celebrity interview) that happens to rank for the
+    generic "deep dive" part of the query while having nothing to do with
+    "SRE". Requiring the keyword to actually appear in the video's own
+    title is a simple, reliable backstop against that drift."""
+    if not title or not keyword:
+        return False
+    return bool(re.search(r'\b' + re.escape(keyword.strip()) + r'\b', title, re.IGNORECASE))
+
 def fetch_youtube_via_api(keyword: str, api_key: str, two_years_ago: float, pages: int = 3):
     """Uses the official YouTube Data API v3 (order=date) for exact publish
     timestamps instead of scraping+guessing relative-time text. Used when
@@ -199,6 +225,8 @@ def fetch_youtube_via_api(keyword: str, api_key: str, two_years_ago: float, page
                 video_id = item.get("id", {}).get("videoId")
                 snippet = item.get("snippet", {})
                 if not video_id:
+                    continue
+                if not _title_matches_keyword(snippet.get("title", ""), keyword):
                     continue
                 published_at = snippet.get("publishedAt")
                 try:
@@ -349,6 +377,8 @@ def live_discover(db, force_refresh: bool = False):
                     yt_url = f"https://youtube.com{yt['url_suffix']}"
                     if any(r['url'] == yt_url for r in local_results):
                         continue
+                    if not _title_matches_keyword(yt.get('title', ''), keyword):
+                        continue
                     ts = parse_yt_time(yt.get('publish_time'))
                     # Filter out videos older than 2 years (and unparseable dates, ts == 0)
                     if ts < two_years_ago:
@@ -488,3 +518,21 @@ def fetch_and_store_cves(db, keywords, days_back: int = 14, results_per_keyword:
             logger.warning("CVE fetch failed for %r: %s", keyword, e)
 
     return added
+
+def find_learning_resources(topic: str, max_results: int = 3) -> list:
+    """Web-searches for resources to actually learn a roadmap step from
+    (docs, tutorials, guides) — a generated roadmap that just lists step
+    titles with nothing to click on isn't much more useful than the
+    title alone. Uses DDGS (free, no API key) rather than the heavier
+    YouTube-scrape-with-retries path used by /discover, since this needs
+    to stay fast enough to run inline for every step of a freshly
+    generated goal."""
+    try:
+        results = DDGS().text(f"{topic} tutorial guide", max_results=max_results)
+        return [
+            {"title": r.get("title", topic), "url": r.get("href"), "source": "Web"}
+            for r in results if r.get("href")
+        ]
+    except Exception as e:
+        logger.warning("Resource search failed for %r: %s", topic, e)
+        return []
