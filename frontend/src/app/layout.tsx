@@ -17,7 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.className} flex min-h-screen bg-[#09090b] text-zinc-100`}>
+      <body className={`${inter.className} min-h-screen bg-[#09090b] text-zinc-100`}>
         <AppShell>{children}</AppShell>
       </body>
     </html>
