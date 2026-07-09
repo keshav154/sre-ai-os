@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { apiFetch } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check, Folder, ChevronDown, ChevronRight, Pencil } from "lucide-react"
+import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check, Folder, ChevronDown, ChevronRight, Pencil, Trash2 } from "lucide-react"
 import { TerminalWindow, TerminalButton, AsciiDivider, Blinker, StatusTag, TerminalPromptInput } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -42,6 +42,7 @@ export default function Dashboard() {
   const [editingUrl, setEditingUrl] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   const itemsPerPage = 12
 
   const showToast = (msg: string, type: 'error' | 'success' = 'error') => {
@@ -408,6 +409,31 @@ export default function Dashboard() {
     setSavingEdit(false)
   }
 
+  const deleteArticle = async (item: any) => {
+    if (!item.id) return
+    if (!window.confirm(`Delete "${item.title}"? This removes it from the app and, if it was written to your vault, deletes that file too. This can't be undone.`)) return
+    setDeletingId(item.id)
+    try {
+      const res = await apiFetch(`${API}/articles/${item.id}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) {
+        showToast(data.detail || 'Failed to delete')
+      } else {
+        showToast(
+          data.vault_error ? `Removed from app, but vault file delete failed: ${data.vault_error}`
+          : data.vault_file_deleted ? 'Deleted — removed from app and vault ✓'
+          : 'Deleted from app.',
+          data.vault_error ? 'error' : 'success'
+        )
+        setSavedArticles(prev => prev.filter((a: any) => a.id !== item.id))
+        setSavedSearchResults(prev => prev ? prev.filter((a: any) => a.id !== item.id) : prev)
+      }
+    } catch (e) {
+      showToast('Failed to reach the backend.')
+    }
+    setDeletingId(null)
+  }
+
   useEffect(() => {
     fetchSavedArticles()
     fetchGoals()
@@ -707,13 +733,23 @@ export default function Dashboard() {
               </span>
             )}
             {editingUrl !== item.url && (
-              <button
-                onClick={e => { e.stopPropagation(); startEditing(item) }}
-                title={`Edit this note's ${editableField(item)}`}
-                className="ml-auto text-term-muted hover:text-term-primary cursor-pointer flex-shrink-0"
-              >
-                <Pencil className="w-3 h-3" />
-              </button>
+              <span className="ml-auto flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={e => { e.stopPropagation(); startEditing(item) }}
+                  title={`Edit this note's ${editableField(item)}`}
+                  className="text-term-muted hover:text-term-primary cursor-pointer"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={e => { e.stopPropagation(); deleteArticle(item) }}
+                  disabled={deletingId === item.id}
+                  title="Delete this saved note"
+                  className="text-term-muted hover:text-term-error disabled:opacity-50 cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </span>
             )}
           </div>
           <h3 className="font-bold text-sm group-hover:text-term-primary transition-colors mb-1 line-clamp-1">{item.title}</h3>

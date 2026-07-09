@@ -229,6 +229,55 @@ def edit_article(article_id: int, req: ArticleEdit, db: Session = Depends(get_db
 
     return {"id": article.id, "summary": article.summary, "notes": article.notes, "saved_to_vault": saved_to_vault}
 
+@app.delete("/articles/{article_id}")
+def delete_article(article_id: int, db: Session = Depends(get_db)):
+    """Removes a saved item entirely: the DB record, its spaced-repetition
+    quiz questions, and — if it was written to an external vault — the
+    actual file on disk or in the GitHub repo. The vault-file removal is
+    best-effort: if the vault is unreachable or the file's already gone,
+    the in-app record is still deleted rather than leaving the user stuck."""
+    import os
+
+    article = db.query(models.Article).filter(models.Article.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    vault_deleted = False
+    vault_error = None
+    if article.saved_to_obsidian:
+        settings = db.query(models.Settings).first()
+        vault_path = settings.obsidian_vault_path if settings and settings.obsidian_vault_path else None
+        github_repo = _normalize_github_repo(settings.github_repo) if settings and settings.github_repo else None
+        github_token = settings.github_token if settings and settings.github_token else None
+        concept = _concept_folder(article)
+        safe_title = _safe_folder_name(article.title)
+
+        try:
+            if github_repo and github_token:
+                from github import Github, GithubException
+                repo = Github(github_token).get_repo(github_repo)
+                file_path = f"SRE-AI-OS/{concept}/{safe_title[:80]}.md"
+                try:
+                    contents = repo.get_contents(file_path)
+                    repo.delete_file(contents.path, f"Remove {safe_title}", contents.sha)
+                    vault_deleted = True
+                except GithubException as e:
+                    if e.status != 404:  # already gone is fine, anything else is worth reporting
+                        vault_error = f"GitHub: {e.status} {e.data.get('message') if isinstance(e.data, dict) else e}"
+            elif vault_path and os.path.isdir(vault_path):
+                file_path = os.path.join(vault_path, "SRE-AI-OS", concept, f"{safe_title[:80]}.md")
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    vault_deleted = True
+        except Exception as e:
+            vault_error = str(e)
+
+    db.query(models.QuizQuestion).filter(models.QuizQuestion.article_id == article_id).delete()
+    db.delete(article)
+    db.commit()
+
+    return {"deleted": True, "vault_file_deleted": vault_deleted, "vault_error": vault_error}
+
 @app.post("/ingest")
 def trigger_ingest(req: UrlRequest, db: Session = Depends(get_db)):
     result = ingest_url(req.url, db, fallback_title=req.fallback_title, fallback_content=req.fallback_content)
