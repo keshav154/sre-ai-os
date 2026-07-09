@@ -324,7 +324,7 @@ def update_settings(req: SettingsUpdate, db: Session = Depends(get_db)):
         if req.obsidian_vault_path is not None:
             settings.obsidian_vault_path = req.obsidian_vault_path
         if req.github_repo is not None:
-            settings.github_repo = req.github_repo
+            settings.github_repo = _normalize_github_repo(req.github_repo) if req.github_repo else req.github_repo
         if req.github_token is not None:
             settings.github_token = req.github_token
     db.commit()
@@ -361,6 +361,20 @@ def _safe_folder_name(name: str) -> str:
     cleaned = "".join(c for c in name if c.isalnum() or c in " -_").strip()
     return cleaned[:60] or "Uncategorized"
 
+def _normalize_github_repo(raw: str) -> str:
+    """GitHub's API wants exactly "owner/repo", but the most natural way to
+    get a repo's identity is to copy it from GitHub's own UI — which hands
+    you a full clone URL (https://github.com/owner/repo.git or
+    git@github.com:owner/repo.git). Rather than making users hand-edit that
+    down to the bare "owner/repo" form, strip the parts the API doesn't
+    want."""
+    import re
+    s = raw.strip()
+    s = re.sub(r'^(https?://)?(www\.)?github\.com[:/]', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'^git@github\.com:', '', s, flags=re.IGNORECASE)
+    s = s.removesuffix('.git')
+    return s.strip('/')
+
 def _concept_folder(article: "models.Article") -> str:
     """The vault used to dump every note flat into one SRE-AI-OS/ folder.
     Now it files each note under SRE-AI-OS/{primary concept}/, using the
@@ -385,7 +399,7 @@ def _write_note_to_vault(db: Session, article: "models.Article", section_title: 
 
     settings = db.query(models.Settings).first()
     vault_path = settings.obsidian_vault_path if settings and settings.obsidian_vault_path else None
-    github_repo = settings.github_repo if settings and settings.github_repo else None
+    github_repo = _normalize_github_repo(settings.github_repo) if settings and settings.github_repo else None
     github_token = settings.github_token if settings and settings.github_token else None
 
     use_github = bool(github_repo and github_token)
