@@ -63,7 +63,7 @@ class LLMClient:
         # Fallback logic if a key is not present
         if model_type == "ollama":
             # Ollama does not need an API key
-            client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=15, max_retries=0) if not self.ollama_client else self.ollama_client
+            client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=60, max_retries=0) if not self.ollama_client else self.ollama_client
             try:
                 response = client.chat.completions.create(
                     model=model_name,
@@ -74,7 +74,7 @@ class LLMClient:
                 return f"AI Summarization failed: {e}. Please check your Ollama Model Name in Settings."
         
         elif model_type == "openrouter":
-            client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1", timeout=15, max_retries=0) if api_key else self.openrouter_client
+            client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1", timeout=60, max_retries=0) if api_key else self.openrouter_client
             if not client: return "AI Summarization bypassed. Please add an OPENROUTER_API_KEY to your settings."
             try:
                 response = client.chat.completions.create(
@@ -86,7 +86,7 @@ class LLMClient:
                 return f"AI Summarization failed (OpenRouter): {e}"
             
         elif model_type == "openai":
-            client = OpenAI(api_key=api_key, timeout=15, max_retries=0) if api_key else self.openai_client
+            client = OpenAI(api_key=api_key, timeout=60, max_retries=0) if api_key else self.openai_client
             if not client: return "AI Summarization bypassed. Please add an OPENAI_API_KEY to your settings."
             try:
                 response = client.chat.completions.create(
@@ -98,7 +98,7 @@ class LLMClient:
                 return f"AI Summarization failed (OpenAI): {e}"
             
         elif model_type == "nvidia_nim":
-            client = OpenAI(api_key=api_key, base_url="https://integrate.api.nvidia.com/v1", timeout=15, max_retries=0) if api_key else self.nvidia_nim_client
+            client = OpenAI(api_key=api_key, base_url="https://integrate.api.nvidia.com/v1", timeout=60, max_retries=0) if api_key else self.nvidia_nim_client
             if not client: return "AI Summarization bypassed. Please add an NVIDIA_NIM_API_KEY to your settings."
             try:
                 response = client.chat.completions.create(
