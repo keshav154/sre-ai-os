@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { apiFetch } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check, Folder, ChevronDown, ChevronRight } from "lucide-react"
+import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check, Folder, ChevronDown, ChevronRight, Pencil } from "lucide-react"
 import { TerminalWindow, TerminalButton, AsciiDivider, Blinker, StatusTag, TerminalPromptInput } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -39,6 +39,9 @@ export default function Dashboard() {
   const [suggestions, setSuggestions] = useState<any[]>([])
   const [reflecting, setReflecting] = useState(false)
   const [actingOn, setActingOn] = useState<number | null>(null)
+  const [editingUrl, setEditingUrl] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
   const itemsPerPage = 12
 
   const showToast = (msg: string, type: 'error' | 'success' = 'error') => {
@@ -364,6 +367,47 @@ export default function Dashboard() {
     setConsolidating(null)
   }
 
+  // A liked item's primary text is its personal `notes`; everything else
+  // shows `summary` — same rule the backend's PUT /articles/{id} uses to
+  // decide which field to write, and which section of the vault file to
+  // update, so editing here and what ends up on disk stay in sync.
+  const editableField = (item: any): 'notes' | 'summary' => (item.liked && item.notes) ? 'notes' : 'summary'
+
+  const startEditing = (item: any) => {
+    setEditingUrl(item.url)
+    setEditDraft(item[editableField(item)] || '')
+  }
+
+  const cancelEditing = () => {
+    setEditingUrl(null)
+    setEditDraft('')
+  }
+
+  const saveEdit = async (item: any) => {
+    if (!item.id) return
+    setSavingEdit(true)
+    try {
+      const field = editableField(item)
+      const res = await apiFetch(`${API}/articles/${item.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: editDraft })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        showToast(data.detail || 'Failed to save edit')
+      } else {
+        showToast(data.saved_to_vault ? 'Saved ✓ vault file updated' : 'Saved ✓ (vault not configured, so only saved in-app)', 'success')
+        setEditingUrl(null)
+        setEditDraft('')
+        fetchSavedArticles()
+      }
+    } catch (e) {
+      showToast('Failed to reach the backend.')
+    }
+    setSavingEdit(false)
+  }
+
   useEffect(() => {
     fetchSavedArticles()
     fetchGoals()
@@ -662,10 +706,54 @@ export default function Dashboard() {
                 ✓ SRE-AI-OS/{conceptFolder(item)}/
               </span>
             )}
+            {editingUrl !== item.url && (
+              <button
+                onClick={e => { e.stopPropagation(); startEditing(item) }}
+                title={`Edit this note's ${editableField(item)}`}
+                className="ml-auto text-term-muted hover:text-term-primary cursor-pointer flex-shrink-0"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            )}
           </div>
           <h3 className="font-bold text-sm group-hover:text-term-primary transition-colors mb-1 line-clamp-1">{item.title}</h3>
+          {editingUrl === item.url ? (
+            <div onClick={e => e.stopPropagation()} className="mb-2">
+              <p className="text-[10px] font-bold text-term-muted uppercase tracking-wide mb-1">
+                editing {editableField(item)}.md
+              </p>
+              <textarea
+                value={editDraft}
+                onChange={e => setEditDraft(e.target.value)}
+                autoFocus
+                className="w-full bg-black border border-term-primary px-3 py-2 text-xs font-term text-term-primary focus:outline-none min-h-[140px] resize-y"
+              />
+              <div className="flex items-center gap-2 mt-2">
+                <TerminalButton size="sm" solid onClick={() => saveEdit(item)} disabled={savingEdit}>
+                  {savingEdit ? 'saving...' : 'save'}
+                </TerminalButton>
+                <TerminalButton size="sm" variant="muted" onClick={cancelEditing} disabled={savingEdit}>
+                  cancel
+                </TerminalButton>
+              </div>
+            </div>
+          ) : (
           <p className="text-term-muted text-xs line-clamp-2">{item.summary}</p>
-          {item.liked && item.notes && (() => {
+          )}
+          {editingUrl !== item.url && (!item.summary || item.summary.includes('Pending')) && (() => {
+            const isRegenerating = processingAction?.url === item.url && processingAction?.action === 'save'
+            return (
+              <button
+                onClick={e => { e.stopPropagation(); handleSaveToVault(item.url) }}
+                disabled={isRegenerating}
+                title="This note was saved before it had a real AI summary — generate one now"
+                className="mt-1.5 font-term text-[10px] font-bold text-term-error hover:text-term-primary disabled:opacity-50 cursor-pointer"
+              >
+                {isRegenerating ? 'regenerating...' : '↻ regenerate summary'}
+              </button>
+            )
+          })()}
+          {editingUrl !== item.url && item.liked && item.notes && (() => {
             const notesOpen = expandedNotes.has(item.url)
             const actionItems = notesOpen ? extractActionItems(item.notes) : []
             return (

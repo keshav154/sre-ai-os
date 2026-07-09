@@ -183,6 +183,52 @@ def get_articles(q: Optional[str] = None, limit: int = 100, offset: int = 0, db:
         )
     return query.order_by(models.Article.created_at.desc()).offset(offset).limit(limit).all()
 
+class ArticleEdit(BaseModel):
+    summary: Optional[str] = None
+    notes: Optional[str] = None
+
+@app.put("/articles/{article_id}")
+def edit_article(article_id: int, req: ArticleEdit, db: Session = Depends(get_db)):
+    """Lets a user hand-edit the AI-generated summary/notes on a saved
+    article — correct a mistake, add their own gloss, trim it down — rather
+    than only being able to regenerate it wholesale via the LLM. If the
+    article was already written to an external vault, rewrites that file
+    too so the two stay in sync."""
+    article = db.query(models.Article).filter(models.Article.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    if req.summary is not None:
+        article.summary = req.summary
+    if req.notes is not None:
+        article.notes = req.notes
+    db.commit()
+
+    # Keep the semantic index current so /ask and auto-linking reflect the
+    # edited text, not stale content.
+    settings = db.query(models.Settings).first()
+    _embed_article(article, settings, db)
+
+    saved_to_vault = False
+    if article.saved_to_obsidian:
+        try:
+            # Mirrors which field actually gets shown/written where: liked
+            # items use the personal "notes", everything else uses
+            # "summary" — same rule the frontend uses to decide what to
+            # display.
+            if article.liked and article.notes:
+                _write_note_to_vault(db, article, "AI Notes (Liked)", article.notes)
+            else:
+                _write_note_to_vault(db, article, "AI Summary & Key Learnings", article.summary or "")
+            saved_to_vault = True
+        except HTTPException:
+            # Vault write failed (bad token, moved repo, etc.) — the edit
+            # itself is still saved in the DB and visible in-app, so don't
+            # fail the whole request over an external sync problem.
+            pass
+
+    return {"id": article.id, "summary": article.summary, "notes": article.notes, "saved_to_vault": saved_to_vault}
+
 @app.post("/ingest")
 def trigger_ingest(req: UrlRequest, db: Session = Depends(get_db)):
     result = ingest_url(req.url, db, fallback_title=req.fallback_title, fallback_content=req.fallback_content)
@@ -451,10 +497,22 @@ tags: [{frontmatter_tags}]
             try:
                 repo = g.get_repo(github_repo)
             except GithubException as e:
+                if e.status == 404:
+                    # GitHub deliberately returns 404 (not 403) for a repo
+                    # your token can't see, whether it's private-and-no-access
+                    # or genuinely doesn't exist — it won't tell you which,
+                    # so both possibilities need spelling out here.
+                    hint = (
+                        f"Either the repo name is wrong, or (more common) it's private and your "
+                        f"token doesn't have access — a classic token needs the full \"repo\" scope, "
+                        f"a fine-grained token needs this repo explicitly selected under Repository "
+                        f"access with \"Contents: Read and write\" permission."
+                    )
+                else:
+                    hint = "Check the repo name is exactly \"username/repo\" and your token has access to it."
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Could not access GitHub repo '{github_repo}' ({e.status}: {_github_message(e)}). "
-                           f"Check the repo name is exactly \"username/repo\" and your token has access to it.",
+                    detail=f"Could not access GitHub repo '{github_repo}' ({e.status}: {_github_message(e)}). {hint}",
                 )
 
             file_path = f"SRE-AI-OS/{concept}/{safe_title[:80]}.md"
@@ -504,7 +562,7 @@ tags: [{frontmatter_tags}]
 
 @app.post("/save-to-vault")
 def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
-    from llm_client import resolve_llm_config
+    from llm_client import llm, resolve_llm_config
     # Ingest first if not already in DB
     article = db.query(models.Article).filter(models.Article.url == req.url).first()
     if not article:
@@ -516,20 +574,37 @@ def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
     if not article:
         raise HTTPException(status_code=400, detail="Could not fetch article content.")
 
-    if article.saved_to_obsidian:
+    # Only short-circuit on a note that actually has real content — a note
+    # saved before this fix (or saved while the LLM was misconfigured) can
+    # be stuck with the "Pending..." placeholder even though
+    # saved_to_obsidian is already True. Letting those through here means
+    # clicking "save to vault" again self-heals them instead of being a
+    # permanent no-op.
+    if article.saved_to_obsidian and article.summary and "Pending" not in article.summary:
         return {"message": "Already saved to vault.", "status": "already_saved"}
+
+    save_settings = db.query(models.Settings).first()
+    llm_engine, ollama_model, api_key = resolve_llm_config(save_settings)
+
+    # A "Save to Vault" click can be the first thing a user does with an
+    # article (no prior /summarize call) — ingest() skips the LLM call for
+    # speed, leaving article.summary as a "Pending..." placeholder. Writing
+    # that straight to the vault produced empty-looking notes, so generate
+    # the real summary now if one doesn't exist yet rather than settling
+    # for a placeholder.
+    if not article.summary or "Pending" in article.summary:
+        prompt = f"You are an SRE AI. Summarize the following content in detail, extracting the most important key learning points for an SRE/DevOps engineer. Here is the content:\n\n{article.content[:15000]}"
+        article.summary = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+        db.commit()
 
     # Tags decide which SRE-AI-OS/{concept}/ folder the note lands in, so
     # generate them before writing rather than after.
-    save_settings = db.query(models.Settings).first()
     if not article.embedding:
         _embed_article(article, save_settings, db)
     if not article.tags:
-        llm_engine, ollama_model, api_key = resolve_llm_config(save_settings)
         _generate_tags(article, llm_engine, ollama_model, api_key, db)
 
-    summary_text = article.summary if article.summary and "Pending" not in article.summary else "Not yet summarized."
-    file_path = _write_note_to_vault(db, article, "AI Summary & Key Learnings", summary_text)
+    file_path = _write_note_to_vault(db, article, "AI Summary & Key Learnings", article.summary)
 
     article.saved_to_obsidian = True
     db.commit()
