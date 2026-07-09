@@ -27,6 +27,10 @@ export default function Dashboard() {
   const [savedSearchResults, setSavedSearchResults] = useState<any[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [expandedRelated, setExpandedRelated] = useState<Set<string>>(new Set())
+  const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
+  const [expandedConcept, setExpandedConcept] = useState<Set<string>>(new Set())
+  const [conceptNotes, setConceptNotes] = useState<Record<number, { content: string; source_titles: string[] }>>({})
+  const [consolidating, setConsolidating] = useState<number | null>(null)
   const [agentMode, setAgentMode] = useState<'research' | 'runbook'>('research')
   const [agentInput, setAgentInput] = useState('')
   const [agentRunning, setAgentRunning] = useState(false)
@@ -266,7 +270,7 @@ export default function Dashboard() {
     setActingOn(null)
   }
 
-  const attachToGoal = async (item: any, goalId: string) => {
+  const attachToGoal = async (item: any, goalId: string, stepTitle?: string, stepDescription?: string) => {
     if (!goalId) return
     const goal = goals.find(g => g.id === Number(goalId))
     try {
@@ -275,8 +279,8 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           goal_id: Number(goalId),
-          title: item.title,
-          description: `Resource: ${item.url}`,
+          title: stepTitle || item.title,
+          description: stepDescription || `Resource: ${item.url}`,
           order_index: goal?.steps?.length ?? 0,
         })
       })
@@ -286,6 +290,38 @@ export default function Dashboard() {
     } catch (e) {
       showToast('Failed to attach to goal')
     }
+  }
+
+  // Pulls the bullet lines out of the "## Action Items" section of an
+  // AI-generated note (see the /like prompt in main.py), so each one can
+  // get its own "+ Goal" button instead of the whole note being one
+  // opaque block of text.
+  const extractActionItems = (notes: string): string[] => {
+    const match = notes.match(/##\s*Action Items\s*\n([\s\S]*?)(\n##\s|\n?$)/i)
+    if (!match) return []
+    return match[1]
+      .split('\n')
+      .map(line => line.replace(/^\s*[-*]\s+|^\s*\d+[.)]\s+/, '').trim())
+      .filter(Boolean)
+  }
+
+  const handleConsolidate = async (item: any) => {
+    if (!item.id) return
+    setConsolidating(item.id)
+    try {
+      const res = await apiFetch(`${API}/articles/${item.id}/consolidate`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        showToast(data.detail || 'Failed to consolidate')
+      } else {
+        setConceptNotes(prev => ({ ...prev, [item.id]: { content: data.content, source_titles: data.source_titles } }))
+        setExpandedConcept(prev => new Set(prev).add(item.url))
+        showToast(data.saved_to_vault ? `Consolidated "${data.concept}" concept note ✓ saved to vault` : `Consolidated "${data.concept}" concept note (configure a vault to auto-save it)`, 'success')
+      }
+    } catch (e) {
+      showToast('Failed to reach the backend.')
+    }
+    setConsolidating(null)
   }
 
   useEffect(() => {
@@ -598,25 +634,96 @@ export default function Dashboard() {
         {item.liked && <Heart className="inline w-3 h-3 fill-pink-400 text-pink-400 mb-2 ml-1.5" />}
         <h3 className="font-semibold text-sm group-hover:text-blue-400 transition-colors mb-1 line-clamp-1">{item.title}</h3>
         <p className="text-zinc-500 text-xs line-clamp-2">{item.summary}</p>
+        {item.liked && item.notes && (() => {
+          const notesOpen = expandedNotes.has(item.url)
+          const actionItems = notesOpen ? extractActionItems(item.notes) : []
+          return (
+            <div onClick={e => e.stopPropagation()} className="mt-2">
+              <button
+                onClick={() => setExpandedNotes(prev => {
+                  const next = new Set(prev)
+                  next.has(item.url) ? next.delete(item.url) : next.add(item.url)
+                  return next
+                })}
+                className="text-[10px] font-bold text-pink-400 hover:text-pink-300 cursor-pointer"
+              >
+                {notesOpen ? '▾' : '▸'} 📝 {notesOpen ? 'Hide' : 'View'} AI Notes
+              </button>
+              {notesOpen && (
+                <div className="mt-2 p-3 bg-zinc-900 border border-zinc-800 rounded-lg">
+                  <div className="prose prose-invert prose-xs max-w-none prose-p:leading-snug prose-headings:text-pink-400 prose-a:text-blue-400">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.notes}</ReactMarkdown>
+                  </div>
+                  {goals.length > 0 && actionItems.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-zinc-800 space-y-1.5">
+                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wide mb-1.5">Quick Actions</p>
+                      {actionItems.map((action, ai) => (
+                        <div key={ai} className="flex items-center gap-2">
+                          <p className="flex-1 text-xs text-zinc-400 line-clamp-1">{action}</p>
+                          <select
+                            defaultValue=""
+                            onChange={e => { attachToGoal(item, e.target.value, action, `From notes on: ${item.title} (${item.url})`); e.target.value = '' }}
+                            title="Add this action item to a Learning Goal"
+                            className="text-[10px] px-1.5 py-1 rounded bg-indigo-900/40 hover:bg-indigo-800/50 text-indigo-300 border border-indigo-800/50 cursor-pointer flex-shrink-0 max-w-[90px]"
+                          >
+                            <option value="" disabled>+ Goal</option>
+                            {goals.map((g: any) => (
+                              <option key={g.id} value={g.id}>{g.title}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })()}
         {item.related_articles && (() => {
           let related: any[] = []
           try { related = JSON.parse(item.related_articles) } catch {}
           if (!related.length) return null
+          const conceptOpen = expandedConcept.has(item.url)
+          const concept = conceptNotes[item.id]
           return (
-            <div onClick={e => e.stopPropagation()} className="mt-2 pt-2 border-t border-zinc-800/70 flex flex-wrap gap-1">
-              <span className="text-[10px] text-zinc-600 mr-1">🔗 Related:</span>
-              {related.map((r: any) => (
-                <a
-                  key={r.id}
-                  href={r.url?.startsWith('http') ? r.url : undefined}
-                  onClick={e => { if (!r.url?.startsWith('http')) e.preventDefault() }}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 hover:text-blue-400 truncate max-w-[140px]"
-                >
-                  {r.title}
-                </a>
-              ))}
+            <div onClick={e => e.stopPropagation()} className="mt-2 pt-2 border-t border-zinc-800/70">
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[10px] text-zinc-600 mr-1">🔗 Related:</span>
+                {related.map((r: any) => (
+                  <a
+                    key={r.id}
+                    href={r.url?.startsWith('http') ? r.url : undefined}
+                    onClick={e => { if (!r.url?.startsWith('http')) e.preventDefault() }}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 hover:text-blue-400 truncate max-w-[140px]"
+                  >
+                    {r.title}
+                  </a>
+                ))}
+              </div>
+              <button
+                onClick={() => concept ? setExpandedConcept(prev => {
+                  const next = new Set(prev)
+                  next.has(item.url) ? next.delete(item.url) : next.add(item.url)
+                  return next
+                }) : handleConsolidate(item)}
+                disabled={consolidating === item.id}
+                className="mt-1.5 text-[10px] font-bold text-violet-400 hover:text-violet-300 disabled:opacity-50 cursor-pointer"
+              >
+                {consolidating === item.id
+                  ? 'Synthesizing...'
+                  : concept
+                    ? `${conceptOpen ? '▾' : '▸'} 🧬 ${conceptOpen ? 'Hide' : 'View'} Concept Note`
+                    : '🧬 Consolidate with Related'}
+              </button>
+              {concept && conceptOpen && (
+                <div className="mt-2 p-3 bg-zinc-900 border border-violet-900/40 rounded-lg prose prose-invert prose-xs max-w-none prose-p:leading-snug prose-headings:text-violet-400 prose-a:text-blue-400">
+                  <p className="text-[10px] text-zinc-500 not-prose mb-2">Synthesized from: {concept.source_titles.join(', ')}</p>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{concept.content}</ReactMarkdown>
+                </div>
+              )}
             </div>
           )
         })()}

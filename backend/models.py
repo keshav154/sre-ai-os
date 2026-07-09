@@ -117,6 +117,20 @@ class AgentMemory(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_used_at = Column(DateTime(timezone=True), nullable=True)
 
+class ConceptNote(Base):
+    """An evolving, synthesized note for one concept/tag — merges an
+    article and its auto-linked related articles into a single note
+    instead of leaving N separate per-article notes on the same idea.
+    One row per concept; re-consolidating updates it in place rather than
+    creating duplicates."""
+    __tablename__ = "concept_notes"
+    id = Column(Integer, primary_key=True, index=True)
+    concept = Column(String, unique=True, index=True)
+    content = Column(Text)
+    source_article_ids = Column(Text)  # JSON-encoded list of article ids folded into this note
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
 class TimeLog(Base):
     __tablename__ = "time_logs"
     id = Column(Integer, primary_key=True, index=True)

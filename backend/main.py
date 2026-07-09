@@ -356,11 +356,31 @@ def summarize_article(req: UrlRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail=res["error"])
         return res
 
-def _write_note_to_vault(db: Session, article: "models.Article", section_title: str, body_text: str):
-    """Shared by /save-to-vault and /like: builds the markdown note and
-    writes it either to a local Obsidian vault or a GitHub repo, depending
-    on Settings. Raises HTTPException on misconfiguration or write failure."""
-    import datetime, os
+def _safe_folder_name(name: str) -> str:
+    cleaned = "".join(c for c in name if c.isalnum() or c in " -_").strip()
+    return cleaned[:60] or "Uncategorized"
+
+def _concept_folder(article: "models.Article") -> str:
+    """The vault used to dump every note flat into one SRE-AI-OS/ folder.
+    Now it files each note under SRE-AI-OS/{primary concept}/, using the
+    first of the LLM-extracted tags (see _generate_tags) as the concept —
+    so the vault ends up organized the same way the knowledge graph
+    already groups things, instead of you having to sort N flat files
+    yourself. Falls back to "Uncategorized" if tags haven't been
+    generated yet (e.g. no embedding/LLM provider configured)."""
+    import json
+    try:
+        tags = json.loads(article.tags) if article.tags else []
+    except (TypeError, ValueError):
+        tags = []
+    return _safe_folder_name(tags[0]) if tags else "Uncategorized"
+
+def _write_note_to_vault(db: Session, article: "models.Article", section_title: str, body_text: str, filename_override: str = None):
+    """Shared by /save-to-vault, /like, the research/runbook agents, and
+    /articles/{id}/consolidate: builds the markdown note and writes it
+    either to a local Obsidian vault or a GitHub repo, depending on
+    Settings. Raises HTTPException on misconfiguration or write failure."""
+    import datetime, os, json
 
     settings = db.query(models.Settings).first()
     vault_path = settings.obsidian_vault_path if settings and settings.obsidian_vault_path else None
@@ -376,14 +396,20 @@ def _write_note_to_vault(db: Session, article: "models.Article", section_title: 
             raise HTTPException(status_code=400, detail=f"Obsidian vault path does not exist: {vault_path}")
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    safe_title = "".join(c for c in article.title if c.isalnum() or c in " -_").strip()
+    safe_title = _safe_folder_name(filename_override or article.title)
+    concept = _concept_folder(article)
+    try:
+        tags = json.loads(article.tags) if article.tags else []
+    except (TypeError, ValueError):
+        tags = []
+    frontmatter_tags = ", ".join(["sre", "ai-os"] + tags) or "sre, ai-os"
 
     note_content = f"""---
 title: "{article.title}"
 source: {article.source}
 url: {article.url}
 date_saved: {now}
-tags: [sre, ai-os]
+tags: [{frontmatter_tags}]
 ---
 
 # {article.title}
@@ -403,7 +429,7 @@ tags: [sre, ai-os]
             from github import Github
             g = Github(github_token)
             repo = g.get_repo(github_repo)
-            file_path = f"SRE-AI-OS/{safe_title[:80]}.md"
+            file_path = f"SRE-AI-OS/{concept}/{safe_title[:80]}.md"
 
             try:
                 # Try to get file first to see if it exists (for update)
@@ -413,8 +439,8 @@ tags: [sre, ai-os]
                 # If it doesn't exist, create it (404)
                 repo.create_file(file_path, f"Add {safe_title}", note_content)
         else:
-            # Create Knowledge folder inside vault locally
-            knowledge_dir = os.path.join(vault_path, "SRE-AI-OS")
+            # Create Knowledge/{concept} folder inside vault locally
+            knowledge_dir = os.path.join(vault_path, "SRE-AI-OS", concept)
             os.makedirs(knowledge_dir, exist_ok=True)
 
             file_path = os.path.join(knowledge_dir, f"{safe_title[:80]}.md")
@@ -444,17 +470,20 @@ def save_to_vault(req: UrlRequest, db: Session = Depends(get_db)):
     if article.saved_to_obsidian:
         return {"message": "Already saved to vault.", "status": "already_saved"}
 
-    summary_text = article.summary if article.summary and "Pending" not in article.summary else "Not yet summarized."
-    file_path = _write_note_to_vault(db, article, "AI Summary & Key Learnings", summary_text)
-
-    article.saved_to_obsidian = True
-    db.commit()
+    # Tags decide which SRE-AI-OS/{concept}/ folder the note lands in, so
+    # generate them before writing rather than after.
     save_settings = db.query(models.Settings).first()
     if not article.embedding:
         _embed_article(article, save_settings, db)
     if not article.tags:
         llm_engine, ollama_model, api_key = resolve_llm_config(save_settings)
         _generate_tags(article, llm_engine, ollama_model, api_key, db)
+
+    summary_text = article.summary if article.summary and "Pending" not in article.summary else "Not yet summarized."
+    file_path = _write_note_to_vault(db, article, "AI Summary & Key Learnings", summary_text)
+
+    article.saved_to_obsidian = True
+    db.commit()
     return {"message": f"Saved to Obsidian vault at {file_path}", "status": "saved", "path": file_path}
 
 def _embed_article(article: "models.Article", db_settings, db: Session):
@@ -511,6 +540,115 @@ def _link_related_articles(article: "models.Article", db: Session, top_k: int = 
     related = [a for score, a in scored[:top_k] if score >= 0.75]
     article.related_articles = json.dumps([{"id": a.id, "title": a.title, "url": a.url} for a in related])
     db.commit()
+
+@app.get("/articles/{article_id}/concept-note")
+def get_concept_note(article_id: int, db: Session = Depends(get_db)):
+    """Returns the existing synthesized concept note for this article's
+    primary concept, if one has been generated via /consolidate. Lets the
+    frontend show "already consolidated" without re-running the LLM pass."""
+    import json
+    article = db.query(models.Article).filter(models.Article.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    concept = _concept_folder(article)
+    note = db.query(models.ConceptNote).filter(models.ConceptNote.concept == concept).first()
+    if not note:
+        return None
+    return {
+        "concept": note.concept,
+        "content": note.content,
+        "source_article_ids": json.loads(note.source_article_ids) if note.source_article_ids else [],
+        "updated_at": str(note.updated_at),
+    }
+
+@app.post("/articles/{article_id}/consolidate")
+def consolidate_article(article_id: int, db: Session = Depends(get_db)):
+    """Agentic note evolution: instead of leaving N separate per-article
+    notes on the same idea, synthesizes this article and its auto-linked
+    related articles (the same "🔗 Related" list surfaced in the UI) into
+    one updated concept note, written to the vault as
+    SRE-AI-OS/{concept}/_Concept - {concept}.md — a living document that
+    gets updated (not duplicated) each time you consolidate again."""
+    import json as _json
+    from llm_client import llm, resolve_llm_config
+
+    article = db.query(models.Article).filter(models.Article.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    try:
+        related_refs = _json.loads(article.related_articles) if article.related_articles else []
+    except (TypeError, ValueError):
+        related_refs = []
+    related_ids = [r["id"] for r in related_refs if "id" in r]
+    related = db.query(models.Article).filter(models.Article.id.in_(related_ids)).all() if related_ids else []
+
+    if not related:
+        raise HTTPException(status_code=400, detail="No related articles yet to consolidate with — this article hasn't been auto-linked to anything similar.")
+
+    sources = [article] + related
+    concept = _concept_folder(article)
+
+    source_blocks = []
+    for a in sources:
+        body = a.notes or a.summary or (a.content or "")[:1500]
+        source_blocks.append(f"### {a.title}\n{body[:3000]}")
+    combined = "\n\n".join(source_blocks)
+
+    settings = db.query(models.Settings).first()
+    llm_engine, ollama_model, api_key = resolve_llm_config(settings)
+
+    prompt = f"""You are synthesizing {len(sources)} separate notes on the same underlying concept ("{concept}") into ONE unified, evolving concept note. This will replace scattered per-article notes with a single reference document.
+
+Write structured Markdown with these sections:
+## Overview
+(2-3 sentences on what this concept covers, synthesized across all sources)
+## Key Concepts
+(merged, deduplicated bullet points — if two sources say the same thing, state it once; if they add different angles, capture both)
+## Action Items
+(a merged, deduplicated list of concrete things to try/investigate)
+## Where This Came From
+(one line per source noting what it specifically contributed, so nothing is lost in the merge)
+
+If sources genuinely conflict or disagree, note that explicitly rather than silently picking one.
+
+Source notes:
+{combined}"""
+
+    content = llm.generate(prompt, model_type=llm_engine, ollama_model=ollama_model, api_key=api_key)
+
+    note = db.query(models.ConceptNote).filter(models.ConceptNote.concept == concept).first()
+    if note:
+        note.content = content
+        note.source_article_ids = _json.dumps([a.id for a in sources])
+    else:
+        note = models.ConceptNote(concept=concept, content=content, source_article_ids=_json.dumps([a.id for a in sources]))
+        db.add(note)
+    db.commit()
+    db.refresh(note)
+
+    saved_path = None
+    try:
+        import types
+        concept_note_shim = types.SimpleNamespace(
+            title=f"Concept: {concept}",
+            source="Concept Synthesis",
+            url=f"concept://{concept}",
+            tags=_json.dumps([concept]),
+        )
+        saved_path = _write_note_to_vault(
+            db, concept_note_shim, "Synthesized Concept Note", content,
+            filename_override=f"_Concept - {concept}",
+        )
+    except HTTPException:
+        pass  # vault not configured — the concept note is still saved in the DB
+
+    return {
+        "concept": concept,
+        "content": content,
+        "source_titles": [a.title for a in sources],
+        "saved_to_vault": bool(saved_path),
+    }
 
 def _generate_tags(article: "models.Article", llm_engine, ollama_model, api_key, db: Session):
     """Extracts 3-6 concept tags (e.g. "kubernetes", "rbac", "incident-response")
@@ -1205,6 +1343,7 @@ def run_runbook_agent(req: PromptRequest, db: Session = Depends(get_db)):
     )
     db.add(article)
     db.commit()
+    _generate_tags(article, llm_engine, ollama_model, api_key, db)
 
     saved_path = None
     try:
