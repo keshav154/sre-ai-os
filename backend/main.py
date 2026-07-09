@@ -427,18 +427,51 @@ tags: [{frontmatter_tags}]
 """
     try:
         if use_github:
-            from github import Github
+            from github import Github, GithubException
+
+            def _github_message(exc: "GithubException") -> str:
+                data = exc.data if isinstance(exc.data, dict) else {}
+                return data.get("message") or str(exc)
+
             g = Github(github_token)
-            repo = g.get_repo(github_repo)
+            try:
+                repo = g.get_repo(github_repo)
+            except GithubException as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Could not access GitHub repo '{github_repo}' ({e.status}: {_github_message(e)}). "
+                           f"Check the repo name is exactly \"username/repo\" and your token has access to it.",
+                )
+
             file_path = f"SRE-AI-OS/{concept}/{safe_title[:80]}.md"
 
             try:
-                # Try to get file first to see if it exists (for update)
+                # Try to get the file first — if it exists, update it instead
+                # of creating a duplicate/erroring.
                 contents = repo.get_contents(file_path)
                 repo.update_file(contents.path, f"Update {safe_title}", note_content, contents.sha)
-            except Exception:
-                # If it doesn't exist, create it (404)
-                repo.create_file(file_path, f"Add {safe_title}", note_content)
+            except GithubException as e:
+                if e.status == 404:
+                    # File genuinely doesn't exist yet (or the repo has no
+                    # commits at all) — create it. Any other status here is a
+                    # real problem (bad credentials, no write access, etc.)
+                    # and should surface as an error rather than being
+                    # silently retried as a create, which previously masked
+                    # the actual cause behind a second, unrelated failure.
+                    try:
+                        repo.create_file(file_path, f"Add {safe_title}", note_content)
+                    except GithubException as create_err:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"GitHub write failed ({create_err.status}: {_github_message(create_err)}). "
+                                   f"Check your token has \"repo\" (or \"contents: write\") permission.",
+                        )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"GitHub write failed ({e.status}: {_github_message(e)}). "
+                               f"Check your token has \"repo\" (or \"contents: write\") permission.",
+                    )
         else:
             # Create Knowledge/{concept} folder inside vault locally
             knowledge_dir = os.path.join(vault_path, "SRE-AI-OS", concept)
@@ -450,7 +483,8 @@ tags: [{frontmatter_tags}]
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to write to Obsidian vault: {str(e)}")
+        target = "GitHub repo" if use_github else "Obsidian vault"
+        raise HTTPException(status_code=500, detail=f"Failed to write to {target}: {str(e)}")
 
     return file_path
 
