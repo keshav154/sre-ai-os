@@ -179,6 +179,7 @@ def get_articles(q: Optional[str] = None, limit: int = 100, offset: int = 0, db:
             models.Article.title.ilike(like)
             | models.Article.summary.ilike(like)
             | models.Article.content.ilike(like)
+            | models.Article.tags.ilike(like)
         )
     return query.order_by(models.Article.created_at.desc()).offset(offset).limit(limit).all()
 

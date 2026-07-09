@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { apiFetch } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check } from "lucide-react"
+import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check, Folder, ChevronDown, ChevronRight } from "lucide-react"
 import { TerminalWindow, TerminalButton, AsciiDivider, Blinker, StatusTag, TerminalPromptInput } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -80,6 +80,45 @@ export default function Dashboard() {
     savedArticles.forEach((sa: any) => map.set(sa.url, sa))
     return map
   }, [savedArticles])
+
+  // Mirrors the backend's _concept_folder() (main.py): the first
+  // LLM-extracted tag names the folder an article's vault note lands in
+  // under SRE-AI-OS/{concept}/. Grouping by the same rule here means the
+  // in-app view always matches the real folder layout, with or without an
+  // Obsidian/GitHub vault configured.
+  const conceptFolder = (item: any): string => {
+    try {
+      const tags = item.tags ? JSON.parse(item.tags) : []
+      return tags[0] ? String(tags[0]) : 'Uncategorized'
+    } catch {
+      return 'Uncategorized'
+    }
+  }
+
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set())
+  const toggleFolder = (folder: string) => {
+    setCollapsedFolders(prev => {
+      const next = new Set(prev)
+      next.has(folder) ? next.delete(folder) : next.add(folder)
+      return next
+    })
+  }
+
+  const vaultListToShow = savedSearch.trim() ? (savedSearchResults ?? []) : savedArticles
+
+  const groupedVault = useMemo(() => {
+    const groups = new Map<string, any[]>()
+    for (const item of vaultListToShow as any[]) {
+      const folder = conceptFolder(item)
+      if (!groups.has(folder)) groups.set(folder, [])
+      groups.get(folder)!.push(item)
+    }
+    return Array.from(groups.entries()).sort(([a], [b]) => {
+      if (a === 'Uncategorized') return 1
+      if (b === 'Uncategorized') return -1
+      return a.localeCompare(b)
+    })
+  }, [vaultListToShow])
 
   // Separate feed from viewed
   const { unviewedFeed, viewedFeed } = useMemo(() => {
@@ -615,9 +654,14 @@ export default function Dashboard() {
     >
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <StatusTag variant={SOURCE_VARIANT[item.source] || 'muted'}>{item.source || 'WEB'}</StatusTag>
             {item.liked && <Heart className="w-3 h-3 fill-term-error text-term-error" />}
+            {item.saved_to_obsidian && (
+              <span className="text-[9px] text-term-muted font-term" title="Written to your external vault (Obsidian/GitHub)">
+                ✓ SRE-AI-OS/{conceptFolder(item)}/
+              </span>
+            )}
           </div>
           <h3 className="font-bold text-sm group-hover:text-term-primary transition-colors mb-1 line-clamp-1">{item.title}</h3>
           <p className="text-term-muted text-xs line-clamp-2">{item.summary}</p>
@@ -916,23 +960,41 @@ export default function Dashboard() {
           >
             <div className="flex items-center gap-2 mb-4">
               <Bookmark className="w-4 h-4" />
-              <span className="text-xs text-term-muted">{savedArticles.length} note{savedArticles.length === 1 ? '' : 's'} archived</span>
+              <span className="text-xs text-term-muted">
+                {savedArticles.length} note{savedArticles.length === 1 ? '' : 's'} archived across {groupedVault.length} folder{groupedVault.length === 1 ? '' : 's'}
+              </span>
             </div>
-            <div className="space-y-2">
-              {savedSearch.trim() ? (
-                searching ? (
-                  <p className="text-term-muted text-sm">searching...</p>
-                ) : (savedSearchResults?.length ?? 0) === 0 ? (
-                  <p className="text-term-muted text-sm">no saved articles match &quot;{savedSearch}&quot;.</p>
-                ) : (
-                  savedSearchResults!.map((item: any, i) => <SavedItemCard key={i} item={item} />)
-                )
-              ) : savedArticles.length === 0 ? (
-                <p className="text-term-muted text-sm">vault is empty. summarize an article to save it.</p>
-              ) : (
-                savedArticles.map((item: any, i) => <SavedItemCard key={i} item={item} />)
-              )}
-            </div>
+            {savedSearch.trim() && searching ? (
+              <p className="text-term-muted text-sm">searching...</p>
+            ) : savedSearch.trim() && vaultListToShow.length === 0 ? (
+              <p className="text-term-muted text-sm">no saved articles match &quot;{savedSearch}&quot;.</p>
+            ) : savedArticles.length === 0 ? (
+              <p className="text-term-muted text-sm">vault is empty. summarize or like an article to save it.</p>
+            ) : (
+              <div className="space-y-4">
+                {groupedVault.map(([folder, items]) => {
+                  const isCollapsed = collapsedFolders.has(folder)
+                  return (
+                    <div key={folder} className="border border-dashed border-term-border">
+                      <button
+                        onClick={() => toggleFolder(folder)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-left cursor-pointer hover:bg-term-muted/10 transition-colors"
+                      >
+                        <span className="flex items-center gap-2 text-xs font-bold text-term-amber uppercase tracking-wide">
+                          <Folder className="w-3.5 h-3.5" /> SRE-AI-OS/{folder}/ <span className="text-term-muted font-normal normal-case">({items.length})</span>
+                        </span>
+                        {isCollapsed ? <ChevronRight className="w-3.5 h-3.5 text-term-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-term-muted" />}
+                      </button>
+                      {!isCollapsed && (
+                        <div className="p-2 pt-0 space-y-2">
+                          {items.map((item: any, i: number) => <SavedItemCard key={i} item={item} />)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </TerminalWindow>
         </div>
 
