@@ -8,6 +8,25 @@ from config import settings
 
 logger = logging.getLogger("llm_client")
 
+def _extract_message_text(message) -> str:
+    """Pulls the actual text out of an OpenAI-SDK-shaped chat message.
+    Some models — reasoning models especially, which several of the free
+    OpenRouter/NVIDIA NIM models are — put their answer in a separate
+    `reasoning`/`reasoning_content` field and leave `content` as None or
+    empty, since they treat `content` as the "final answer after
+    reasoning" slot and only fill it once reasoning is complete (or not at
+    all, depending on the provider's OpenAI-compat shim). Silently
+    returning that None was exactly the "no output, no error" bug — this
+    makes sure something is always returned, and it's the actual model
+    output rather than nothing."""
+    content = getattr(message, "content", None)
+    if content:
+        return content
+    reasoning = getattr(message, "reasoning", None) or getattr(message, "reasoning_content", None)
+    if reasoning:
+        return reasoning
+    return "(The model returned an empty response. Try again, or switch models/engines in Settings — some free-tier models return nothing under load.)"
+
 class LLMClient:
     def __init__(self):
         self.openai_client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
@@ -50,7 +69,7 @@ class LLMClient:
                     model=model_name,
                     messages=[{"role": "user", "content": prompt}]
                 )
-                return response.choices[0].message.content
+                return _extract_message_text(response.choices[0].message)
             except Exception as e:
                 return f"AI Summarization failed: {e}. Please check your Ollama Model Name in Settings."
         
@@ -59,10 +78,10 @@ class LLMClient:
             if not client: return "AI Summarization bypassed. Please add an OPENROUTER_API_KEY to your settings."
             try:
                 response = client.chat.completions.create(
-                    model=model_name or "meta-llama/llama-3-8b-instruct:free", 
+                    model=model_name or "meta-llama/llama-3-8b-instruct:free",
                     messages=[{"role": "user", "content": prompt}]
                 )
-                return response.choices[0].message.content
+                return _extract_message_text(response.choices[0].message)
             except Exception as e:
                 return f"AI Summarization failed (OpenRouter): {e}"
             
@@ -74,7 +93,7 @@ class LLMClient:
                     model=model_name or "gpt-4o",
                     messages=[{"role": "user", "content": prompt}]
                 )
-                return response.choices[0].message.content
+                return _extract_message_text(response.choices[0].message)
             except Exception as e:
                 return f"AI Summarization failed (OpenAI): {e}"
             
@@ -86,7 +105,7 @@ class LLMClient:
                     model=model_name or "meta/llama-3.1-8b-instruct",
                     messages=[{"role": "user", "content": prompt}]
                 )
-                return response.choices[0].message.content
+                return _extract_message_text(response.choices[0].message)
             except Exception as e:
                 return f"AI Summarization failed (NVIDIA NIM): {e}"
 
@@ -117,32 +136,39 @@ class LLMClient:
         # Fallback if preferred model is not configured
         if self.openrouter_client:
             try:
-                return self.openrouter_client.chat.completions.create(
+                response = self.openrouter_client.chat.completions.create(
                     model="meta-llama/llama-3-8b-instruct:free",
                     messages=[{"role": "user", "content": prompt}]
-                ).choices[0].message.content
-            except: pass
-            
+                )
+                return _extract_message_text(response.choices[0].message)
+            except Exception:
+                pass
+
         if self.ollama_client:
             try:
-                return self.ollama_client.chat.completions.create(
+                response = self.ollama_client.chat.completions.create(
                     model=ollama_model,
                     messages=[{"role": "user", "content": prompt}]
-                ).choices[0].message.content
-            except: pass
-            
+                )
+                return _extract_message_text(response.choices[0].message)
+            except Exception:
+                pass
+
         if self.gemini_model:
             try:
                 return self.gemini_model.generate_content(prompt).text
-            except: pass
-            
+            except Exception:
+                pass
+
         if self.openai_client:
             try:
-                return self.openai_client.chat.completions.create(
+                response = self.openai_client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": prompt}]
-                ).choices[0].message.content
-            except: pass
+                )
+                return _extract_message_text(response.choices[0].message)
+            except Exception:
+                pass
         
         return "AI Summarization bypassed. (Ensure you have Ollama running with 'llama3', or add an OPENROUTER_API_KEY to your .env file)."
 

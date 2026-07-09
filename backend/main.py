@@ -300,11 +300,20 @@ def update_settings(req: SettingsUpdate, db: Session = Depends(get_db)):
         settings.keywords = req.keywords
         settings.llm_engine = req.llm_engine
         settings.ollama_model = req.ollama_model
-        settings.openrouter_key = req.openrouter_key
-        settings.openai_key = req.openai_key
-        settings.anthropic_key = req.anthropic_key
-        settings.gemini_key = req.gemini_key
-        settings.nvidia_nim_key = req.nvidia_nim_key
+        # These are Optional fields — a request that omits one (or any
+        # future caller that only wants to update a subset of settings)
+        # must not silently wipe out an already-configured key. Only
+        # overwrite when the caller actually sent a value.
+        if req.openrouter_key is not None:
+            settings.openrouter_key = req.openrouter_key
+        if req.openai_key is not None:
+            settings.openai_key = req.openai_key
+        if req.anthropic_key is not None:
+            settings.anthropic_key = req.anthropic_key
+        if req.gemini_key is not None:
+            settings.gemini_key = req.gemini_key
+        if req.nvidia_nim_key is not None:
+            settings.nvidia_nim_key = req.nvidia_nim_key
         if req.youtube_api_key is not None:
             settings.youtube_api_key = req.youtube_api_key
         if req.webhook_url is not None:
