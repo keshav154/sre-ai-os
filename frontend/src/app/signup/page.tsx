@@ -12,6 +12,7 @@ export default function Signup() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -27,7 +28,7 @@ export default function Signup() {
       const res = await fetch(`${API}/auth/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, password, invite_code: inviteCode })
       })
       const data = await res.json()
       if (!res.ok) {
@@ -85,6 +86,17 @@ export default function Signup() {
               required
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5 text-zinc-400">Invite Code</label>
+            <input
+              type="password"
+              value={inviteCode}
+              onChange={e => setInviteCode(e.target.value)}
+              required
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+            <p className="text-[10px] text-zinc-600 mt-1">Ask whoever runs this instance for the invite code.</p>
           </div>
           {error && <p className="text-xs text-red-400">{error}</p>}
           <button

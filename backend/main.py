@@ -121,6 +121,7 @@ def read_root():
 class SignupRequest(BaseModel):
     email: str
     password: str
+    invite_code: str = ""
 
 class LoginRequest(BaseModel):
     email: str
@@ -128,6 +129,13 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/signup")
 def signup(req: SignupRequest, db: Session = Depends(get_db)):
+    import hmac
+    # Gated by a shared invite code (SIGNUP_SECRET) rather than left open —
+    # anyone who finds the app's URL could otherwise create an account and
+    # see everything, since this app has no per-user data separation.
+    if not hmac.compare_digest(req.invite_code.strip(), env_settings.signup_secret):
+        raise HTTPException(status_code=403, detail="Invalid invite code.")
+
     email = req.email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Please provide a valid email.")
