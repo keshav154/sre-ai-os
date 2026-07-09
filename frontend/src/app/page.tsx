@@ -3,7 +3,8 @@ import { useState, useEffect, useMemo } from 'react'
 import { apiFetch } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, Activity, Zap, RefreshCw, Terminal, CheckCircle2, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check } from "lucide-react"
+import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check } from "lucide-react"
+import { TerminalWindow, TerminalButton, AsciiDivider, Blinker, StatusTag, TerminalPromptInput } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -460,6 +461,11 @@ export default function Dashboard() {
     if (item.url?.startsWith('http')) window.open(item.url, '_blank')
   }
 
+  const SOURCE_VARIANT: Record<string, 'primary' | 'amber' | 'error'> = {
+    YouTube: 'error',
+    Medium: 'amber',
+  }
+
   const FeedCard = ({ item, showUnviewBtn = false }: { item: any; showUnviewBtn?: boolean }) => {
     const savedItem = savedArticlesMap.get(item.url)
     const isSaved = !!savedItem
@@ -478,46 +484,38 @@ export default function Dashboard() {
     }
 
     return (
-      <div
-        className={`flex flex-col bg-zinc-950 rounded-xl border transition-all group cursor-pointer h-full relative
-          ${isViewed ? 'border-zinc-700/50 opacity-75' : 'border-zinc-800 hover:border-emerald-800/50'}
-        `}
+      <TerminalWindow
+        variant={isViewed ? undefined : (SOURCE_VARIANT[item.source] || 'primary')}
+        noPadding
+        className={`flex flex-col h-full group ${isViewed ? 'opacity-50' : ''}`}
         onClick={() => openItem(item)}
       >
-        {/* Viewed badge */}
-        {isViewed && (
-          <div className="absolute top-2 right-2 z-10 flex items-center gap-1 bg-zinc-800 rounded-full px-2 py-0.5 text-xs text-zinc-500">
-            <Eye className="w-3 h-3" /> Viewed
-          </div>
-        )}
+        <div className="flex items-center justify-between px-3 py-1.5 text-xs font-bold uppercase tracking-wide bg-term-muted/20 border-b border-term-border">
+          <span className={item.source === 'YouTube' ? 'text-term-error' : item.source === 'Medium' ? 'text-term-amber' : 'text-term-primary'}>
+            {item.source}
+          </span>
+          <span className="flex items-center gap-2 text-term-muted normal-case font-normal">
+            {isViewed && <><Eye className="w-3 h-3" />viewed</>}
+            {item.date_str}
+          </span>
+        </div>
 
         {item.thumbnail && (
-          <div className="w-full h-36 rounded-t-xl overflow-hidden bg-zinc-900 relative flex-shrink-0">
-            <img src={item.thumbnail} alt={item.title} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+          <div className="w-full h-32 overflow-hidden bg-black relative flex-shrink-0">
+            <img src={item.thumbnail} alt={item.title} className="w-full h-full object-cover grayscale opacity-70 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-300" />
           </div>
         )}
 
-        <div className="flex-1 flex flex-col p-4">
+        <div className="flex-1 flex flex-col p-3">
           <div className="mb-2">
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <span className={`text-xs font-bold px-2 py-0.5 rounded-md 
-                ${item.source === 'YouTube' ? 'bg-red-500/20 text-red-400' :
-                  item.source === 'Medium' ? 'bg-amber-500/20 text-amber-400' :
-                  'bg-blue-500/20 text-blue-400'}`}>
-                {item.source}
-              </span>
-              {item.date_str && (
-                <span className="text-xs text-zinc-500">{item.date_str}</span>
-              )}
-            </div>
-            <h3 className="font-semibold text-sm leading-snug group-hover:text-emerald-400 transition-colors line-clamp-2">{item.title}</h3>
+            <h3 className="font-bold text-sm leading-snug group-hover:text-term-primary transition-colors line-clamp-2">{item.title}</h3>
             {item.related?.length > 0 && (
               <div onClick={e => e.stopPropagation()} className="mt-1.5">
                 <button
                   onClick={toggleRelated}
-                  className="text-[10px] font-bold text-zinc-500 hover:text-zinc-300 cursor-pointer"
+                  className="font-term text-[10px] font-bold text-term-muted hover:text-term-primary cursor-pointer"
                 >
-                  {showRelated ? '▾' : '▸'} Similar coverage: {item.related.length} more source{item.related.length > 1 ? 's' : ''}
+                  {showRelated ? '▾' : '▸'} similar coverage: {item.related.length} more source{item.related.length > 1 ? 's' : ''}
                 </button>
                 {showRelated && (
                   <div className="mt-1.5 space-y-1">
@@ -527,9 +525,9 @@ export default function Dashboard() {
                         href={r.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="block text-[10px] text-zinc-500 hover:text-emerald-400 truncate"
+                        className="block font-term text-[10px] text-term-muted hover:text-term-primary truncate"
                       >
-                        {r.source}: {r.title}
+                        {'>'} {r.source}: {r.title}
                       </a>
                     ))}
                   </div>
@@ -538,68 +536,53 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className={`text-xs mb-4 flex-1 ${isSaved ? 'text-zinc-300' : 'text-zinc-600 italic line-clamp-3'} prose prose-invert prose-p:leading-snug prose-headings:text-emerald-400 prose-a:text-blue-400 prose-sm max-w-none`}>
+          <div className="text-xs mb-3 flex-1 term-prose">
             {isLiked && savedItem.notes ? (
               <>
-                <span className="text-[10px] font-bold text-pink-400 uppercase tracking-wide">📝 AI Notes</span>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{savedItem.notes}</ReactMarkdown>
+                <p className="text-[10px] font-bold text-term-amber uppercase tracking-wide mb-1">// AI Notes</p>
+                <div className="line-clamp-5 overflow-hidden">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{savedItem.notes}</ReactMarkdown>
+                </div>
               </>
             ) : isSaved ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{savedItem.summary}</ReactMarkdown>
+              <div className="line-clamp-5 overflow-hidden">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{savedItem.summary}</ReactMarkdown>
+              </div>
             ) : (
-              item.summary
+              <p className="text-term-muted italic line-clamp-3">{item.summary}</p>
             )}
           </div>
 
-          <div className="mt-auto flex gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
+          <div className="mt-auto flex flex-wrap gap-x-3 gap-y-1.5 items-center pt-2 border-t border-dashed border-term-border" onClick={e => e.stopPropagation()}>
             <button
               onClick={() => handleLike(item.url, item)}
               disabled={isLiking || isLiked}
               title={isLiked ? 'Liked — AI notes generated' : 'Like & generate AI notes'}
-              className={`text-xs px-2.5 py-1.5 rounded-md font-bold transition-colors cursor-pointer disabled:cursor-default
-                ${isLiked ? 'bg-pink-900/40 text-pink-400' : 'bg-zinc-800 hover:bg-pink-900/30 text-zinc-400 hover:text-pink-400'}`}
+              className="cursor-pointer disabled:cursor-default"
             >
-              <Heart className={`w-3.5 h-3.5 ${isLiked ? 'fill-pink-400' : ''} ${isLiking ? 'animate-pulse' : ''}`} />
+              <Heart className={`w-3.5 h-3.5 ${isLiked ? 'fill-term-error text-term-error' : 'text-term-muted hover:text-term-error'} ${isLiking ? 'animate-pulse' : ''}`} />
             </button>
             {!isSaved && (
-              <button
-                onClick={() => handleSummarize(item.url, item)}
-                disabled={isSummarizing || isSaving}
-                className="flex-1 text-xs px-2 py-1.5 rounded-md font-bold bg-blue-700 hover:bg-blue-600 text-white transition-colors cursor-pointer disabled:opacity-50"
-              >
-                {isSummarizing ? 'Thinking...' : '✨ AI Summarize'}
-              </button>
+              <TerminalButton size="sm" onClick={() => handleSummarize(item.url, item)} disabled={isSummarizing || isSaving}>
+                {isSummarizing ? 'thinking...' : 'summarize'}
+              </TerminalButton>
             )}
             {isSaved && !savedItem.saved_to_obsidian && (
-              <button
-                onClick={() => handleSummarize(item.url, item)}
-                disabled={isSummarizing || isSaving}
-                className="flex-1 text-xs px-2 py-1.5 rounded-md font-bold bg-blue-700 hover:bg-blue-600 text-white transition-colors cursor-pointer"
-              >
-                {isSummarizing ? 'Thinking...' : 'Re-Summarize'}
-              </button>
+              <TerminalButton size="sm" onClick={() => handleSummarize(item.url, item)} disabled={isSummarizing || isSaving}>
+                {isSummarizing ? 'thinking...' : 're-summarize'}
+              </TerminalButton>
             )}
             {(!isSaved || !savedItem?.saved_to_obsidian) && (
-              <button
-                onClick={() => handleSaveToVault(item.url, item)}
-                disabled={isSaving || isSummarizing}
-                className="flex-1 text-xs px-2 py-1.5 rounded-md font-bold bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer"
-              >
-                {isSaving ? 'Saving...' : '🔒 Save to Vault'}
-              </button>
+              <TerminalButton size="sm" variant="amber" onClick={() => handleSaveToVault(item.url, item)} disabled={isSaving || isSummarizing}>
+                {isSaving ? 'saving...' : 'save to vault'}
+              </TerminalButton>
             )}
             {isSaved && savedItem.saved_to_obsidian && (
-              <button disabled className="flex-1 text-xs px-2 py-1.5 rounded-md font-bold bg-zinc-800 text-zinc-500 cursor-not-allowed">
-                ✓ In Vault
-              </button>
+              <StatusTag variant="primary">IN VAULT</StatusTag>
             )}
             {showUnviewBtn && (
-              <button
-                onClick={() => unmarkViewed(item.url)}
-                className="text-xs px-2 py-1.5 rounded-md font-bold bg-zinc-800 hover:bg-zinc-700 text-zinc-400 transition-colors cursor-pointer"
-                title="Move back to feed"
-              >
-                <EyeOff className="w-3 h-3" />
+              <button onClick={() => unmarkViewed(item.url)} title="Move back to feed" className="cursor-pointer text-term-muted hover:text-term-primary">
+                <EyeOff className="w-3.5 h-3.5" />
               </button>
             )}
             {goals.length > 0 && (
@@ -607,9 +590,9 @@ export default function Dashboard() {
                 defaultValue=""
                 onChange={e => { attachToGoal(item, e.target.value); e.target.value = '' }}
                 title="Add to a Learning Goal"
-                className="text-xs px-2 py-1.5 rounded-md font-bold bg-indigo-900/40 hover:bg-indigo-800/50 text-indigo-300 transition-colors cursor-pointer border border-indigo-800/50 max-w-[110px]"
+                className="font-term text-[10px] font-bold px-1.5 py-1 bg-term-bg border border-term-border text-term-primary cursor-pointer max-w-[90px]"
               >
-                <option value="" disabled>+ Goal</option>
+                <option value="" disabled>+ goal</option>
                 {goals.map((g: any) => (
                   <option key={g.id} value={g.id}>{g.title}</option>
                 ))}
@@ -617,116 +600,123 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-      </div>
+      </TerminalWindow>
     )
   }
 
-  // Card for an item in "My Saved Vault". Separate from FeedCard since
-  // saved articles carry different fields (no timestamp/thumbnail, but do
-  // have `related_articles` — the auto-linked notes the app found for you).
+  // Row for an item in "My Saved Vault". A dense list uses bordered rows
+  // rather than N full windowed cards — separate from FeedCard since saved
+  // articles carry different fields (no timestamp/thumbnail, but do have
+  // `related_articles` — the auto-linked notes the app found for you).
   const SavedItemCard = ({ item }: { item: any }) => (
     <div
       onClick={() => openSavedItem(item)}
-      className="flex items-start gap-3 p-4 bg-zinc-950 rounded-lg border border-zinc-800 hover:border-blue-800/50 transition-colors cursor-pointer group"
+      className="p-3 border border-term-border hover:border-term-primary transition-colors cursor-pointer group"
     >
-      <div className="flex-1 min-w-0">
-        <span className="text-xs font-bold px-2 py-0.5 rounded-md mb-2 inline-block bg-blue-500/20 text-blue-400">{item.source || 'Web'}</span>
-        {item.liked && <Heart className="inline w-3 h-3 fill-pink-400 text-pink-400 mb-2 ml-1.5" />}
-        <h3 className="font-semibold text-sm group-hover:text-blue-400 transition-colors mb-1 line-clamp-1">{item.title}</h3>
-        <p className="text-zinc-500 text-xs line-clamp-2">{item.summary}</p>
-        {item.liked && item.notes && (() => {
-          const notesOpen = expandedNotes.has(item.url)
-          const actionItems = notesOpen ? extractActionItems(item.notes) : []
-          return (
-            <div onClick={e => e.stopPropagation()} className="mt-2">
-              <button
-                onClick={() => setExpandedNotes(prev => {
-                  const next = new Set(prev)
-                  next.has(item.url) ? next.delete(item.url) : next.add(item.url)
-                  return next
-                })}
-                className="text-[10px] font-bold text-pink-400 hover:text-pink-300 cursor-pointer"
-              >
-                {notesOpen ? '▾' : '▸'} 📝 {notesOpen ? 'Hide' : 'View'} AI Notes
-              </button>
-              {notesOpen && (
-                <div className="mt-2 p-3 bg-zinc-900 border border-zinc-800 rounded-lg">
-                  <div className="prose prose-invert prose-xs max-w-none prose-p:leading-snug prose-headings:text-pink-400 prose-a:text-blue-400">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.notes}</ReactMarkdown>
-                  </div>
-                  {goals.length > 0 && actionItems.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-zinc-800 space-y-1.5">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wide mb-1.5">Quick Actions</p>
-                      {actionItems.map((action, ai) => (
-                        <div key={ai} className="flex items-center gap-2">
-                          <p className="flex-1 text-xs text-zinc-400 line-clamp-1">{action}</p>
-                          <select
-                            defaultValue=""
-                            onChange={e => { attachToGoal(item, e.target.value, action, `From notes on: ${item.title} (${item.url})`); e.target.value = '' }}
-                            title="Add this action item to a Learning Goal"
-                            className="text-[10px] px-1.5 py-1 rounded bg-indigo-900/40 hover:bg-indigo-800/50 text-indigo-300 border border-indigo-800/50 cursor-pointer flex-shrink-0 max-w-[90px]"
-                          >
-                            <option value="" disabled>+ Goal</option>
-                            {goals.map((g: any) => (
-                              <option key={g.id} value={g.id}>{g.title}</option>
-                            ))}
-                          </select>
-                        </div>
-                      ))}
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <StatusTag variant={SOURCE_VARIANT[item.source] || 'muted'}>{item.source || 'WEB'}</StatusTag>
+            {item.liked && <Heart className="w-3 h-3 fill-term-error text-term-error" />}
+          </div>
+          <h3 className="font-bold text-sm group-hover:text-term-primary transition-colors mb-1 line-clamp-1">{item.title}</h3>
+          <p className="text-term-muted text-xs line-clamp-2">{item.summary}</p>
+          {item.liked && item.notes && (() => {
+            const notesOpen = expandedNotes.has(item.url)
+            const actionItems = notesOpen ? extractActionItems(item.notes) : []
+            return (
+              <div onClick={e => e.stopPropagation()} className="mt-2">
+                <button
+                  onClick={() => setExpandedNotes(prev => {
+                    const next = new Set(prev)
+                    next.has(item.url) ? next.delete(item.url) : next.add(item.url)
+                    return next
+                  })}
+                  className="font-term text-[10px] font-bold text-term-amber hover:text-term-primary cursor-pointer"
+                >
+                  {notesOpen ? '▾' : '▸'} // {notesOpen ? 'hide' : 'view'} ai_notes.md
+                </button>
+                {notesOpen && (
+                  <div className="mt-2 p-3 bg-black border border-term-border">
+                    <div className="term-prose">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.notes}</ReactMarkdown>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })()}
-        {item.related_articles && (() => {
-          let related: any[] = []
-          try { related = JSON.parse(item.related_articles) } catch {}
-          if (!related.length) return null
-          const conceptOpen = expandedConcept.has(item.url)
-          const concept = conceptNotes[item.id]
-          return (
-            <div onClick={e => e.stopPropagation()} className="mt-2 pt-2 border-t border-zinc-800/70">
-              <div className="flex flex-wrap items-center gap-1">
-                <span className="text-[10px] text-zinc-600 mr-1">🔗 Related:</span>
-                {related.map((r: any) => (
-                  <a
-                    key={r.id}
-                    href={r.url?.startsWith('http') ? r.url : undefined}
-                    onClick={e => { if (!r.url?.startsWith('http')) e.preventDefault() }}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 hover:text-blue-400 truncate max-w-[140px]"
-                  >
-                    {r.title}
-                  </a>
-                ))}
+                    {goals.length > 0 && actionItems.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-dashed border-term-border space-y-1.5">
+                        <p className="text-[10px] font-bold text-term-muted uppercase tracking-wide mb-1.5">$ quick_actions --list</p>
+                        {actionItems.map((action, ai) => (
+                          <div key={ai} className="flex items-center gap-2">
+                            <p className="flex-1 text-xs text-term-primary/80 line-clamp-1">{'>'} {action}</p>
+                            <select
+                              defaultValue=""
+                              onChange={e => { attachToGoal(item, e.target.value, action, `From notes on: ${item.title} (${item.url})`); e.target.value = '' }}
+                              title="Add this action item to a Learning Goal"
+                              className="font-term text-[10px] px-1.5 py-1 bg-term-bg border border-term-border text-term-primary cursor-pointer flex-shrink-0 max-w-[90px]"
+                            >
+                              <option value="" disabled>+ goal</option>
+                              {goals.map((g: any) => (
+                                <option key={g.id} value={g.id}>{g.title}</option>
+                              ))}
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-              <button
-                onClick={() => concept ? setExpandedConcept(prev => {
-                  const next = new Set(prev)
-                  next.has(item.url) ? next.delete(item.url) : next.add(item.url)
-                  return next
-                }) : handleConsolidate(item)}
-                disabled={consolidating === item.id}
-                className="mt-1.5 text-[10px] font-bold text-violet-400 hover:text-violet-300 disabled:opacity-50 cursor-pointer"
-              >
-                {consolidating === item.id
-                  ? 'Synthesizing...'
-                  : concept
-                    ? `${conceptOpen ? '▾' : '▸'} 🧬 ${conceptOpen ? 'Hide' : 'View'} Concept Note`
-                    : '🧬 Consolidate with Related'}
-              </button>
-              {concept && conceptOpen && (
-                <div className="mt-2 p-3 bg-zinc-900 border border-violet-900/40 rounded-lg prose prose-invert prose-xs max-w-none prose-p:leading-snug prose-headings:text-violet-400 prose-a:text-blue-400">
-                  <p className="text-[10px] text-zinc-500 not-prose mb-2">Synthesized from: {concept.source_titles.join(', ')}</p>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{concept.content}</ReactMarkdown>
+            )
+          })()}
+          {item.related_articles && (() => {
+            let related: any[] = []
+            try { related = JSON.parse(item.related_articles) } catch {}
+            if (!related.length) return null
+            const conceptOpen = expandedConcept.has(item.url)
+            const concept = conceptNotes[item.id]
+            return (
+              <div onClick={e => e.stopPropagation()} className="mt-2 pt-2 border-t border-dashed border-term-border">
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="font-term text-[10px] text-term-muted mr-1">link:</span>
+                  {related.map((r: any) => (
+                    <a
+                      key={r.id}
+                      href={r.url?.startsWith('http') ? r.url : undefined}
+                      onClick={e => { if (!r.url?.startsWith('http')) e.preventDefault() }}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-term text-[10px] px-1.5 py-0.5 border border-term-border text-term-muted hover:text-term-primary hover:border-term-primary truncate max-w-[140px]"
+                    >
+                      {r.title}
+                    </a>
+                  ))}
                 </div>
-              )}
-            </div>
-          )
-        })()}
+                <button
+                  onClick={() => concept ? setExpandedConcept(prev => {
+                    const next = new Set(prev)
+                    next.has(item.url) ? next.delete(item.url) : next.add(item.url)
+                    return next
+                  }) : handleConsolidate(item)}
+                  disabled={consolidating === item.id}
+                  className="mt-1.5 font-term text-[10px] font-bold text-term-amber hover:text-term-primary disabled:opacity-50 cursor-pointer"
+                >
+                  {consolidating === item.id
+                    ? 'synthesizing...'
+                    : concept
+                      ? `${conceptOpen ? '▾' : '▸'} // ${conceptOpen ? 'hide' : 'view'} concept_note.md`
+                      : '$ consolidate --with-related'}
+                </button>
+                {concept && conceptOpen && (
+                  <div className="mt-2 p-3 bg-black border border-term-amber/40">
+                    <p className="font-term text-[10px] text-term-muted mb-2">source: {concept.source_titles.join(', ')}</p>
+                    <div className="term-prose">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{concept.content}</ReactMarkdown>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+        </div>
       </div>
     </div>
   )
@@ -734,85 +724,77 @@ export default function Dashboard() {
   const totalUnfiltered = unviewedFeed.filter((item: any) => sourceFilter === 'All' || item.source === sourceFilter).length
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 p-6 font-sans">
+    <div className="min-h-screen bg-term-bg text-term-primary p-6 font-term term-scanlines">
       {/* Toast notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl border font-semibold text-sm max-w-sm backdrop-blur-sm transition-all
-          ${toast.type === 'error'
-            ? 'bg-red-950/90 border-red-800 text-red-300'
-            : 'bg-emerald-950/90 border-emerald-800 text-emerald-300'}`}>
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 border font-bold text-sm max-w-sm bg-term-bg
+          ${toast.type === 'error' ? 'border-term-error text-term-error' : 'border-term-primary text-term-primary'}`}>
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <span>{toast.msg}</span>
-          <button onClick={() => setToast(null)} className="ml-auto text-zinc-400 hover:text-white cursor-pointer">
+          <button onClick={() => setToast(null)} className="ml-auto text-term-muted hover:text-term-primary cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
-      <header className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+
+      <header className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight flex items-center gap-3">
-            <Terminal className="w-7 h-7 text-emerald-400" /> SRE AI OS
+          <h1 className="text-2xl font-extrabold tracking-tight flex items-center gap-2 uppercase term-glow">
+            <Terminal className="w-6 h-6" /> SRE_AI_OS<Blinker className="ml-0.5" />
           </h1>
-          <p className="text-zinc-500 mt-1 text-sm">Operational intelligence dashboard</p>
+          <p className="text-term-muted mt-1 text-xs">root@sre-ai-os:~$ status --dashboard</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <TerminalButton
+            solid
+            variant="amber"
             onClick={handleReflectNow}
             disabled={reflecting}
             title="Run the reflection agent now — proposes new goals from recent interests and flags liked items you've never revisited"
-            className="bg-violet-800 hover:bg-violet-700 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 text-sm font-bold transition-colors cursor-pointer disabled:opacity-50"
           >
-            <Lightbulb className={`w-4 h-4 ${reflecting ? 'animate-pulse' : ''}`} />
-            {reflecting ? 'Reflecting...' : 'Reflect Now'}
-          </button>
-          <button
-            onClick={() => handleDiscover(true)}
-            disabled={discovering}
-            className="bg-emerald-700 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 text-sm font-bold transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${discovering ? 'animate-spin' : ''}`} />
-            {discovering ? 'Discovering...' : 'Live Search All Topics'}
-          </button>
+            <span className="flex items-center gap-2">
+              <Lightbulb className={`w-4 h-4 ${reflecting ? 'animate-pulse' : ''}`} />
+              {reflecting ? 'reflecting...' : 'reflect now'}
+            </span>
+          </TerminalButton>
+          <TerminalButton solid onClick={() => handleDiscover(true)} disabled={discovering}>
+            <span className="flex items-center gap-2">
+              <RefreshCw className={`w-4 h-4 ${discovering ? 'animate-spin' : ''}`} />
+              {discovering ? 'discovering...' : 'live search all topics'}
+            </span>
+          </TerminalButton>
         </div>
       </header>
 
       {/* Agent Suggestions inbox — proactive, human-reviewed proposals from
           the reflect loop. Nothing here was created without a review step. */}
       {suggestions.length > 0 && (
-        <div className="mb-8 space-y-2">
-          {suggestions.map(s => (
-            <div
-              key={s.id}
-              className="flex items-start gap-3 bg-violet-950/30 border border-violet-800/40 rounded-xl px-5 py-3.5"
-            >
-              {s.type === 'new_goal'
-                ? <Target className="w-5 h-5 text-violet-400 flex-shrink-0 mt-0.5" />
-                : <Lightbulb className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold text-zinc-200">
-                  {s.type === 'new_goal' ? '💡 New goal suggestion' : '🔁 Open loop'}: {s.title}
-                </p>
-                <p className="text-xs text-zinc-400 mt-0.5">{s.description}</p>
+        <TerminalWindow title="AGENT_SUGGESTIONS" variant="amber" className="mb-6" noPadding>
+          <div className="divide-y divide-dashed divide-term-border">
+            {suggestions.map(s => (
+              <div key={s.id} className="flex items-start gap-3 p-3">
+                {s.type === 'new_goal'
+                  ? <Target className="w-4 h-4 text-term-amber flex-shrink-0 mt-0.5" />
+                  : <Lightbulb className="w-4 h-4 text-term-amber flex-shrink-0 mt-0.5" />}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold">
+                    <StatusTag variant="amber" className="mr-1.5">{s.type === 'new_goal' ? 'NEW GOAL' : 'OPEN LOOP'}</StatusTag>
+                    {s.title}
+                  </p>
+                  <p className="text-xs text-term-muted mt-1">{s.description}</p>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <TerminalButton size="sm" variant="muted" onClick={() => handleSuggestionAction(s, 'dismiss')} disabled={actingOn === s.id}>
+                    dismiss
+                  </TerminalButton>
+                  <TerminalButton size="sm" variant="amber" onClick={() => handleSuggestionAction(s, 'accept')} disabled={actingOn === s.id}>
+                    {s.type === 'new_goal' ? 'create goal' : 'revisit'}
+                  </TerminalButton>
+                </div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  onClick={() => handleSuggestionAction(s, 'dismiss')}
-                  disabled={actingOn === s.id}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-400 font-bold transition-colors cursor-pointer"
-                >
-                  Dismiss
-                </button>
-                <button
-                  onClick={() => handleSuggestionAction(s, 'accept')}
-                  disabled={actingOn === s.id}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white font-bold transition-colors cursor-pointer"
-                >
-                  <Check className="w-3.5 h-3.5" /> {s.type === 'new_goal' ? 'Create Goal' : 'Revisit'}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </TerminalWindow>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -821,58 +803,44 @@ export default function Dashboard() {
 
           {/* Feed tabs */}
           {liveFeed.length > 0 && (
-            <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-xl">
+            <TerminalWindow title="LIVE_FEED">
               {/* Tab row + controls */}
               <div className="flex flex-col gap-4 mb-5">
-                <div className="flex items-center gap-2 border-b border-zinc-800 pb-0">
-                  <button
-                    onClick={() => setActiveTab('feed')}
-                    className={`flex items-center gap-1.5 px-4 py-2.5 font-bold text-sm rounded-t-lg border-b-2 transition-all cursor-pointer
-                      ${activeTab === 'feed' ? 'border-emerald-400 text-emerald-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                  >
-                    <Activity className="w-4 h-4" /> Feed
-                    <span className="ml-1 bg-zinc-800 text-zinc-400 text-xs px-1.5 py-0.5 rounded-full">{unviewedFeed.length}</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('viewed')}
-                    className={`flex items-center gap-1.5 px-4 py-2.5 font-bold text-sm rounded-t-lg border-b-2 transition-all cursor-pointer
-                      ${activeTab === 'viewed' ? 'border-zinc-400 text-zinc-300' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                  >
-                    <Eye className="w-4 h-4" /> Viewed
-                    {viewedFeed.length > 0 && (
-                      <span className="ml-1 bg-zinc-700 text-zinc-300 text-xs px-1.5 py-0.5 rounded-full">{viewedFeed.length}</span>
-                    )}
-                  </button>
+                <div className="flex items-center gap-1">
+                  <TerminalButton size="sm" solid={activeTab === 'feed'} variant="primary" onClick={() => setActiveTab('feed')}>
+                    feed ({unviewedFeed.length})
+                  </TerminalButton>
+                  <TerminalButton size="sm" solid={activeTab === 'viewed'} variant="muted" onClick={() => setActiveTab('viewed')}>
+                    viewed{viewedFeed.length > 0 ? ` (${viewedFeed.length})` : ''}
+                  </TerminalButton>
                 </div>
 
                 {/* Filters — only show on Feed tab */}
                 {activeTab === 'feed' && (
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 overflow-x-auto pb-1 flex-wrap">
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 flex-wrap">
                       {availableSources.map((source: any) => (
-                        <button
+                        <TerminalButton
                           key={source}
+                          size="sm"
+                          solid={sourceFilter === source}
                           onClick={() => { setSourceFilter(source); setCurrentPage(1) }}
-                          className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap transition-colors cursor-pointer
-                            ${sourceFilter === source
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'}`}
                         >
-                          {source}
-                        </button>
+                          {source.toLowerCase()}
+                        </TerminalButton>
                       ))}
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className="text-xs text-zinc-500 font-bold">Sort:</span>
+                      <span className="text-xs text-term-muted font-bold">sort:</span>
                       <select
                         value={sortBy}
                         onChange={e => { setSortBy(e.target.value); setCurrentPage(1) }}
-                        className="bg-zinc-950 border border-zinc-800 rounded-lg p-1.5 text-xs text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                        className="font-term bg-term-bg border border-term-border p-1.5 text-xs text-term-primary focus:outline-none focus:border-term-primary cursor-pointer"
                       >
-                        <option value="Newest">Newest First</option>
-                        <option value="Oldest">Oldest First</option>
-                        <option value="Balanced">Balanced (Mix Topics)</option>
-                        {goals.length > 0 && <option value="Relevant">Relevant to My Goals</option>}
+                        <option value="Newest">newest first</option>
+                        <option value="Oldest">oldest first</option>
+                        <option value="Balanced">balanced (mix topics)</option>
+                        {goals.length > 0 && <option value="Relevant">relevant to my goals</option>}
                       </select>
                     </div>
                   </div>
@@ -880,13 +848,10 @@ export default function Dashboard() {
 
                 {activeTab === 'viewed' && viewedFeed.length > 0 && (
                   <div className="flex items-center justify-between">
-                    <p className="text-xs text-zinc-500">{viewedFeed.length} articles you've opened. Click <EyeOff className="inline w-3 h-3" /> to move back to feed.</p>
-                    <button
-                      onClick={clearAllViewed}
-                      className="text-xs text-red-400 hover:text-red-300 transition-colors cursor-pointer flex items-center gap-1"
-                    >
-                      <X className="w-3 h-3" /> Clear All
-                    </button>
+                    <p className="text-xs text-term-muted">{viewedFeed.length} articles you've opened. Click <EyeOff className="inline w-3 h-3" /> to move back to feed.</p>
+                    <TerminalButton size="sm" variant="error" onClick={clearAllViewed}>
+                      clear all
+                    </TerminalButton>
                   </div>
                 )}
               </div>
@@ -895,9 +860,9 @@ export default function Dashboard() {
               {activeTab === 'feed' && (
                 <>
                   {displayedFeed.length === 0 ? (
-                    <div className="text-center py-12 text-zinc-600">
-                      <Activity className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                      <p>No results. Click "Live Search All Topics" to discover content.</p>
+                    <div className="text-center py-12 text-term-muted">
+                      <Activity className="w-8 h-8 mx-auto mb-3 opacity-40" />
+                      <p className="text-sm">no results. run `live search all topics` to discover content.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -908,12 +873,9 @@ export default function Dashboard() {
                   )}
                   {displayedFeed.length < totalUnfiltered && (
                     <div className="flex justify-center mt-6">
-                      <button
-                        onClick={() => setCurrentPage(p => p + 1)}
-                        className="px-6 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white font-bold rounded-full transition-colors cursor-pointer text-sm"
-                      >
-                        Load More
-                      </button>
+                      <TerminalButton onClick={() => setCurrentPage(p => p + 1)}>
+                        load more
+                      </TerminalButton>
                     </div>
                   )}
                 </>
@@ -922,9 +884,9 @@ export default function Dashboard() {
               {activeTab === 'viewed' && (
                 <>
                   {viewedFeed.length === 0 ? (
-                    <div className="text-center py-12 text-zinc-600">
-                      <Eye className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                      <p>No viewed articles yet. Articles you open will appear here.</p>
+                    <div className="text-center py-12 text-term-muted">
+                      <Eye className="w-8 h-8 mx-auto mb-3 opacity-40" />
+                      <p className="text-sm">no viewed articles yet. articles you open will appear here.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -935,124 +897,111 @@ export default function Dashboard() {
                   )}
                 </>
               )}
-            </section>
+            </TerminalWindow>
           )}
 
           {/* Saved Vault */}
-          <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-xl">
-            <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-              <h2 className="text-lg font-bold flex items-center gap-2">
-                <Bookmark className="text-blue-400 w-5 h-5" /> My Saved Vault
-              </h2>
+          <TerminalWindow
+            title="MY_SAVED_VAULT"
+            titleRight={
               <input
                 type="text"
                 value={savedSearch}
                 onChange={e => setSavedSearch(e.target.value)}
-                placeholder="Search saved articles..."
-                className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 w-56"
+                placeholder="grep vault..."
+                onClick={e => e.stopPropagation()}
+                className="font-term normal-case font-normal bg-term-bg border border-term-bg text-term-bg px-2 py-1 text-xs focus:outline-none focus:border-term-bg w-40 placeholder:text-term-bg/60"
               />
+            }
+          >
+            <div className="flex items-center gap-2 mb-4">
+              <Bookmark className="w-4 h-4" />
+              <span className="text-xs text-term-muted">{savedArticles.length} note{savedArticles.length === 1 ? '' : 's'} archived</span>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-2">
               {savedSearch.trim() ? (
                 searching ? (
-                  <p className="text-zinc-600 text-sm">Searching...</p>
+                  <p className="text-term-muted text-sm">searching...</p>
                 ) : (savedSearchResults?.length ?? 0) === 0 ? (
-                  <p className="text-zinc-600 text-sm">No saved articles match "{savedSearch}".</p>
+                  <p className="text-term-muted text-sm">no saved articles match &quot;{savedSearch}&quot;.</p>
                 ) : (
                   savedSearchResults!.map((item: any, i) => <SavedItemCard key={i} item={item} />)
                 )
               ) : savedArticles.length === 0 ? (
-                <p className="text-zinc-600 text-sm">Your vault is empty. Summarize an article to save it.</p>
+                <p className="text-term-muted text-sm">vault is empty. summarize an article to save it.</p>
               ) : (
                 savedArticles.map((item: any, i) => <SavedItemCard key={i} item={item} />)
               )}
             </div>
-          </section>
+          </TerminalWindow>
         </div>
 
         {/* ── Right: Quick Ingest ── */}
         <div className="space-y-6">
-          <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-            <h2 className="text-lg font-bold flex items-center gap-2 mb-3">
-              <Zap className="text-yellow-400 w-5 h-5" /> Quick Ingest
-            </h2>
-            <p className="text-xs text-zinc-500 mb-3">Paste a URL to extract, summarize &amp; save instantly.</p>
-            <input
-              type="text"
+          <TerminalWindow title="QUICK_INGEST">
+            <p className="text-xs text-term-muted mb-3 flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-term-amber" /> paste a url to extract, summarize &amp; save instantly.</p>
+            <TerminalPromptInput
               value={url}
-              onChange={e => setUrl(e.target.value)}
+              onChange={setUrl}
               onKeyDown={e => e.key === 'Enter' && handleQuickIngest()}
               placeholder="https://..."
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/50 text-zinc-100 mb-3"
+              className="mb-3"
             />
-            <button
-              onClick={handleQuickIngest}
-              disabled={ingesting}
-              className="w-full bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 py-2.5 rounded-lg font-bold text-sm transition-colors cursor-pointer"
-            >
-              {ingesting ? 'Summarizing...' : 'Ingest to Vault'}
-            </button>
-          </section>
+            <TerminalButton solid variant="amber" onClick={handleQuickIngest} disabled={ingesting} className="w-full text-center">
+              {ingesting ? 'summarizing...' : 'ingest to vault'}
+            </TerminalButton>
+          </TerminalWindow>
 
-          <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-3">
+          <TerminalWindow title="AI_AGENT">
+            <div className="flex items-center gap-1 mb-3">
               {[
-                { key: 'research', label: '🔎 Research', icon: Sparkles },
-                { key: 'runbook', label: '📋 Runbook', icon: FileText },
+                { key: 'research', label: 'research', icon: Sparkles },
+                { key: 'runbook', label: 'runbook', icon: FileText },
               ].map(t => (
-                <button
+                <TerminalButton
                   key={t.key}
+                  size="sm"
+                  solid={agentMode === t.key}
                   onClick={() => setAgentMode(t.key as 'research' | 'runbook')}
-                  className={`flex-1 text-xs font-bold py-2 rounded-lg transition-colors cursor-pointer
-                    ${agentMode === t.key ? 'bg-teal-700 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
+                  className="flex-1"
                 >
                   {t.label}
-                </button>
+                </TerminalButton>
               ))}
             </div>
-            <p className="text-xs text-zinc-500 mb-3">
+            <p className="text-xs text-term-muted mb-3">
               {agentMode === 'research'
-                ? 'Ask the Research Agent to investigate a topic — grounded in your own saved vault when relevant.'
-                : 'Describe an incident and get a structured runbook.'}
+                ? 'ask the research agent to investigate a topic — grounded in your own saved vault when relevant.'
+                : 'describe an incident and get a structured runbook.'}
             </p>
             <textarea
               value={agentInput}
               onChange={e => setAgentInput(e.target.value)}
-              placeholder={agentMode === 'research' ? 'e.g. Kubernetes RBAC best practices' : 'e.g. Pod stuck in CrashLoopBackOff'}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/50 text-zinc-100 mb-3 min-h-[70px] resize-none"
+              placeholder={agentMode === 'research' ? 'e.g. kubernetes rbac best practices' : 'e.g. pod stuck in crashloopbackoff'}
+              className="w-full bg-term-bg border border-term-border px-3 py-2.5 text-sm font-term focus:outline-none focus:border-term-primary text-term-primary placeholder:text-term-muted mb-3 min-h-[70px] resize-none"
             />
-            <button
-              onClick={handleRunAgent}
-              disabled={agentRunning || !agentInput.trim()}
-              className="w-full bg-teal-700 hover:bg-teal-600 disabled:opacity-50 py-2.5 rounded-lg font-bold text-sm transition-colors cursor-pointer"
-            >
-              {agentRunning ? 'Working...' : agentMode === 'research' ? 'Research & Save' : 'Generate Runbook'}
-            </button>
+            <TerminalButton solid onClick={handleRunAgent} disabled={agentRunning || !agentInput.trim()} className="w-full text-center">
+              {agentRunning ? 'working...' : agentMode === 'research' ? 'research & save' : 'generate runbook'}
+            </TerminalButton>
             {agentResult && (
-              <div className="mt-3 bg-zinc-950 border border-zinc-800 rounded-lg p-3 max-h-64 overflow-y-auto">
-                <div className="prose prose-invert prose-xs max-w-none prose-p:leading-snug prose-headings:text-teal-400">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{agentResult}</ReactMarkdown>
-                </div>
+              <div className="mt-3 bg-black border border-term-border p-3 max-h-64 overflow-y-auto term-prose">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{agentResult}</ReactMarkdown>
               </div>
             )}
-          </section>
+          </TerminalWindow>
 
-          <section className="bg-zinc-900 border border-red-900/40 rounded-xl p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-bold flex items-center gap-2">
-                <AlertCircle className="text-red-400 w-5 h-5" /> Security Advisories
-              </h2>
-              <button
-                onClick={handleRefreshCves}
-                disabled={refreshingCves}
-                title="Fetch recent CVEs matching your keywords"
-                className="text-zinc-500 hover:text-zinc-300 disabled:opacity-50 cursor-pointer"
-              >
-                <RefreshCw className={`w-4 h-4 ${refreshingCves ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
+          <TerminalWindow title="SECURITY_ADVISORIES" variant="error" titleRight={
+            <button
+              onClick={e => { e.stopPropagation(); handleRefreshCves() }}
+              disabled={refreshingCves}
+              title="Fetch recent CVEs matching your keywords"
+              className="text-term-bg hover:opacity-70 disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshingCves ? 'animate-spin' : ''}`} />
+            </button>
+          }>
             {cves.length === 0 ? (
-              <p className="text-zinc-600 text-xs">No CVEs tracked yet. Click refresh to pull recent ones matching your keywords.</p>
+              <p className="text-term-muted text-xs">no cves tracked yet. click refresh to pull recent ones matching your keywords.</p>
             ) : (
               <div className="space-y-2 max-h-72 overflow-y-auto">
                 {cves.map((c: any) => (
@@ -1061,36 +1010,29 @@ export default function Dashboard() {
                     href={`https://nvd.nist.gov/vuln/detail/${c.cve_id}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="block p-2.5 bg-zinc-950 rounded-lg border border-zinc-800 hover:border-red-800/50 transition-colors"
+                    className="block p-2.5 border border-term-border hover:border-term-error transition-colors"
                   >
                     <div className="flex items-center justify-between gap-2 mb-1">
-                      <span className="text-xs font-bold text-zinc-300">{c.cve_id}</span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                        c.severity === 'CRITICAL' ? 'bg-red-600/30 text-red-300' :
-                        c.severity === 'HIGH' ? 'bg-orange-600/30 text-orange-300' :
-                        c.severity === 'MEDIUM' ? 'bg-yellow-600/30 text-yellow-300' :
-                        'bg-zinc-700 text-zinc-400'
-                      }`}>{c.severity}</span>
+                      <span className="text-xs font-bold">{c.cve_id}</span>
+                      <StatusTag variant={c.severity === 'CRITICAL' || c.severity === 'HIGH' ? 'error' : c.severity === 'MEDIUM' ? 'amber' : 'muted'}>
+                        {c.severity}
+                      </StatusTag>
                     </div>
-                    <p className="text-zinc-500 text-xs line-clamp-2">{c.description}</p>
+                    <p className="text-term-muted text-xs line-clamp-2">{c.description}</p>
                   </a>
                 ))}
               </div>
             )}
-          </section>
+          </TerminalWindow>
 
-          <section className="bg-gradient-to-br from-indigo-900/40 to-purple-900/40 border border-indigo-500/30 rounded-xl p-5">
-            <h2 className="text-lg font-bold flex items-center gap-2 mb-2 text-indigo-200">
-              <BookOpen className="text-indigo-400 w-5 h-5" /> Learning Path
-            </h2>
-            <p className="text-xs text-indigo-300/60 mb-4">Track your SRE goals and time in the Learning Path page.</p>
-            <a
-              href="/learning"
-              className="block w-full text-center py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-bold transition-colors"
-            >
-              Open Learning Path →
+          <TerminalWindow title="LEARNING_PATH">
+            <p className="text-xs text-term-muted mb-4 flex items-center gap-1.5"><BookOpen className="w-3.5 h-3.5" /> track your sre goals and time in the learning path page.</p>
+            <a href="/learning" className="block">
+              <TerminalButton solid variant="amber" className="w-full text-center">
+                open learning path →
+              </TerminalButton>
             </a>
-          </section>
+          </TerminalWindow>
         </div>
       </div>
     </div>
