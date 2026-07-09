@@ -11,6 +11,8 @@ export function TerminalPromptInput({
   prompt = '>',
   type = 'text',
   className = '',
+  required = false,
+  minLength,
 }: {
   value: string
   onChange: (v: string) => void
@@ -19,6 +21,8 @@ export function TerminalPromptInput({
   prompt?: string
   type?: string
   className?: string
+  required?: boolean
+  minLength?: number
 }) {
   return (
     <div className={`flex items-center gap-2 border-b border-term-border py-1.5 focus-within:border-term-primary ${className}`}>
@@ -29,6 +33,8 @@ export function TerminalPromptInput({
         onChange={e => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
+        required={required}
+        minLength={minLength}
         className="flex-1 bg-transparent border-none outline-none font-term text-sm text-term-primary placeholder:text-term-muted"
       />
     </div>

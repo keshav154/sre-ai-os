@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { Brain, CheckCircle2, XCircle, PartyPopper, RefreshCw } from 'lucide-react'
+import { TerminalWindow, TerminalButton, Blinker } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -56,91 +57,93 @@ export default function Quiz() {
   }
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 p-6 font-sans max-w-3xl mx-auto">
+    <div className="min-h-screen bg-term-bg text-term-primary p-6 font-term max-w-3xl mx-auto">
       <header className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-extrabold flex items-center gap-3">
-            <Brain className="text-violet-400 w-8 h-8" /> Recall Quiz
+          <h1 className="text-2xl font-extrabold flex items-center gap-2 uppercase term-glow">
+            <Brain className="w-6 h-6" /> RECALL_QUIZ<Blinker className="ml-0.5" />
           </h1>
-          <p className="text-zinc-400 mt-1 text-sm">
-            Spaced-repetition questions generated from the notes on things you've liked.
+          <p className="text-term-muted mt-1 text-xs">
+            spaced-repetition questions generated from the notes on things you've liked.
           </p>
         </div>
-        <button
-          onClick={fetchAll}
-          className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-lg font-bold transition-colors cursor-pointer text-sm"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </button>
+        <TerminalButton onClick={fetchAll}>
+          <span className="flex items-center gap-2">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> refresh
+          </span>
+        </TerminalButton>
       </header>
 
       <div className="flex gap-4 mb-8">
-        <div className="bg-zinc-900 border border-violet-900/40 rounded-xl px-5 py-3 flex flex-col items-center">
-          <span className="text-2xl font-extrabold text-violet-400">{stats.due}</span>
-          <span className="text-xs text-zinc-500 mt-0.5">Due Now</span>
+        <div className="border border-term-amber/50 px-5 py-3 flex flex-col items-center">
+          <span className="text-2xl font-extrabold text-term-amber">{stats.due}</span>
+          <span className="text-[10px] text-term-muted mt-0.5 uppercase tracking-wide">Due Now</span>
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-5 py-3 flex flex-col items-center">
-          <span className="text-2xl font-extrabold text-zinc-300">{stats.total}</span>
-          <span className="text-xs text-zinc-500 mt-0.5">Total Questions</span>
+        <div className="border border-term-border px-5 py-3 flex flex-col items-center">
+          <span className="text-2xl font-extrabold text-term-primary">{stats.total}</span>
+          <span className="text-[10px] text-term-muted mt-0.5 uppercase tracking-wide">Total Questions</span>
         </div>
       </div>
 
       {loading ? (
-        <div className="text-center py-20 text-zinc-600">
+        <div className="text-center py-20 text-term-muted">
           <RefreshCw className="w-10 h-10 mx-auto mb-3 animate-spin opacity-40" />
-          <p>Loading due questions…</p>
+          <p>loading due questions…</p>
         </div>
       ) : !current ? (
-        <div className="text-center py-20 text-zinc-500 bg-zinc-900 border border-zinc-800 rounded-xl">
-          <PartyPopper className="w-12 h-12 mx-auto mb-4 text-violet-400" />
-          <p className="text-lg font-bold text-zinc-300">You're all caught up!</p>
-          <p className="text-sm mt-1">
+        <TerminalWindow className="text-center py-20">
+          <PartyPopper className="w-12 h-12 mx-auto mb-4 text-term-amber" />
+          <p className="text-lg font-bold text-term-primary">you're all caught up!</p>
+          <p className="text-sm mt-1 text-term-muted">
             {stats.total === 0
-              ? 'Like a post or video on the dashboard to generate your first recall questions.'
-              : 'No questions are due for review right now — check back later.'}
+              ? 'like a post or video on the dashboard to generate your first recall questions.'
+              : 'no questions are due for review right now — check back later.'}
           </p>
-        </div>
+        </TerminalWindow>
       ) : (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8">
-          <p className="text-xs font-bold text-violet-400 uppercase tracking-wide mb-2">{current.article_title}</p>
-          <h2 className="text-xl font-semibold mb-6 leading-relaxed">{current.question}</h2>
+        <TerminalWindow>
+          <p className="text-[10px] font-bold text-term-amber uppercase tracking-wide mb-2">{current.article_title}</p>
+          <h2 className="text-lg font-semibold mb-6 leading-relaxed text-term-primary">{current.question}</h2>
 
           {!revealed ? (
-            <button
-              onClick={() => setRevealed(true)}
-              className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 rounded-lg font-bold transition-colors cursor-pointer"
-            >
-              Reveal Answer
-            </button>
+            <TerminalButton solid onClick={() => setRevealed(true)} className="w-full text-center">
+              reveal answer
+            </TerminalButton>
           ) : (
             <>
-              <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 mb-6 text-zinc-300 text-sm leading-relaxed">
+              <div className="bg-black border border-term-border p-4 mb-6 text-term-primary/90 text-sm leading-relaxed">
                 {current.answer}
               </div>
-              <p className="text-xs text-zinc-500 mb-3">Did you get it right?</p>
+              <p className="text-xs text-term-muted mb-3">did you get it right?</p>
               <div className="flex gap-3">
-                <button
+                <TerminalButton
+                  variant="error"
                   onClick={() => handleAnswer(false)}
                   disabled={answering}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-red-900/30 hover:bg-red-900/50 disabled:opacity-50 text-red-300 rounded-lg font-bold transition-colors cursor-pointer"
+                  className="flex-1 text-center"
                 >
-                  <XCircle className="w-5 h-5" /> Missed It
-                </button>
-                <button
+                  <span className="flex items-center justify-center gap-2">
+                    <XCircle className="w-4 h-4" /> missed it
+                  </span>
+                </TerminalButton>
+                <TerminalButton
+                  solid
                   onClick={() => handleAnswer(true)}
                   disabled={answering}
-                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-emerald-900/30 hover:bg-emerald-900/50 disabled:opacity-50 text-emerald-300 rounded-lg font-bold transition-colors cursor-pointer"
+                  className="flex-1 text-center"
                 >
-                  <CheckCircle2 className="w-5 h-5" /> Got It
-                </button>
+                  <span className="flex items-center justify-center gap-2">
+                    <CheckCircle2 className="w-4 h-4" /> got it
+                  </span>
+                </TerminalButton>
               </div>
             </>
           )}
 
-          <p className="text-xs text-zinc-600 mt-6 text-center">
+          <p className="text-xs text-term-muted mt-6 text-center">
             {queue.length - 1} more due after this
           </p>
-        </div>
+        </TerminalWindow>
       )}
     </div>
   )

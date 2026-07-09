@@ -9,6 +9,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell
 } from 'recharts'
+import { TerminalWindow, TerminalButton, TerminalPromptInput, StatusTag, Blinker } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899']
@@ -59,6 +60,16 @@ interface CheckIn {
   lastChecked?: string
   streak: number
 }
+
+const TAB_ITEMS = [
+  { key: 'goals', label: 'learning goals', icon: Target },
+  { key: 'planner', label: 'monthly planner', icon: Calendar },
+  { key: 'checkins', label: 'schedule check-ins', icon: Bell },
+] as const
+
+const CHART_GRID = '#1f521f'
+const CHART_TICK = { fill: '#4a8f3a', fontSize: 11, fontFamily: 'var(--font-term)' }
+const CHART_TOOLTIP_STYLE = { background: '#0a0a0a', border: '1px solid #1f521f', borderRadius: 0, fontFamily: 'var(--font-term)' }
 
 export default function LearningPath() {
   const [goals, setGoals] = useState<Goal[]>([])
@@ -237,37 +248,32 @@ export default function LearningPath() {
   const monthName = new Date().toLocaleString('default', { month: 'long', year: 'numeric' })
 
   if (loading) return (
-    <div className="min-h-screen bg-[#09090b] flex items-center justify-center">
-      <Loader2 className="w-8 h-8 text-yellow-400 animate-spin" />
+    <div className="min-h-screen bg-term-bg flex items-center justify-center">
+      <Loader2 className="w-8 h-8 text-term-primary animate-spin" />
     </div>
   )
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 p-6 font-sans">
+    <div className="min-h-screen bg-term-bg text-term-primary p-6 font-term">
       <header className="mb-8">
-        <h1 className="text-3xl font-extrabold flex items-center gap-3">
-          <GraduationCap className="text-yellow-400 w-8 h-8" /> Learning Roadmap
+        <h1 className="text-2xl font-extrabold flex items-center gap-2 uppercase term-glow">
+          <GraduationCap className="w-6 h-6" /> LEARNING_ROADMAP<Blinker className="ml-0.5" />
         </h1>
-        <p className="text-zinc-400 mt-1">AI-powered personalized SRE career path + time tracker</p>
+        <p className="text-term-muted mt-1 text-xs">ai-powered personalized sre career path + time tracker</p>
       </header>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-8 border-b border-zinc-800 pb-0 overflow-x-auto">
-        {[
-          { key: 'goals', label: 'Learning Goals', icon: <Target className="w-4 h-4" /> },
-          { key: 'planner', label: 'Monthly Planner', icon: <Calendar className="w-4 h-4" /> },
-          { key: 'checkins', label: 'Schedule Check-ins', icon: <Bell className="w-4 h-4" /> },
-        ].map(tab => (
-          <button
+      <div className="flex gap-1 mb-8 flex-wrap">
+        {TAB_ITEMS.map(tab => (
+          <TerminalButton
             key={tab.key}
-            onClick={() => setActiveTab(tab.key as any)}
-            className={`flex items-center gap-2 px-5 py-2.5 font-bold text-sm rounded-t-lg border-b-2 transition-all cursor-pointer whitespace-nowrap
-              ${activeTab === tab.key
-                ? 'border-yellow-400 text-yellow-400 bg-zinc-900'
-                : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+            solid={activeTab === tab.key}
+            onClick={() => setActiveTab(tab.key)}
           >
-            {tab.icon} {tab.label}
-          </button>
+            <span className="flex items-center gap-2">
+              <tab.icon className="w-3.5 h-3.5" /> {tab.label}
+            </span>
+          </TerminalButton>
         ))}
       </div>
 
@@ -277,54 +283,47 @@ export default function LearningPath() {
           {/* Add Goal + AI Generate */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Manual add */}
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-              <h2 className="font-bold text-lg mb-4 flex items-center gap-2"><Plus className="text-blue-400 w-5 h-5" /> Add New Goal</h2>
-              <input
+            <TerminalWindow title="ADD_NEW_GOAL">
+              <TerminalPromptInput
                 value={newGoalTitle}
-                onChange={e => setNewGoalTitle(e.target.value)}
-                placeholder="Goal title (e.g. Master Kubernetes)"
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3 text-sm"
+                onChange={setNewGoalTitle}
+                placeholder="goal title (e.g. Master Kubernetes)"
+                className="mb-3"
               />
               <textarea
                 value={newGoalDesc}
                 onChange={e => setNewGoalDesc(e.target.value)}
-                placeholder="Short description (optional)"
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3 text-sm min-h-[60px]"
+                placeholder="short description (optional)"
+                className="w-full bg-term-bg border border-term-border p-3 text-term-primary placeholder:text-term-muted focus:outline-none focus:border-term-primary mb-3 text-sm min-h-[60px] font-term resize-none"
               />
-              <button
-                onClick={createGoal}
-                className="w-full bg-blue-700 hover:bg-blue-600 py-2.5 rounded-lg font-bold text-sm transition-colors cursor-pointer"
-              >
-                Create Goal
-              </button>
-            </div>
+              <TerminalButton solid onClick={createGoal} className="w-full text-center">
+                create goal
+              </TerminalButton>
+            </TerminalWindow>
 
             {/* AI Generate */}
-            <div className="bg-zinc-900 border border-violet-900/40 rounded-xl p-5">
-              <h2 className="font-bold text-lg mb-1 flex items-center gap-2"><Sparkles className="text-violet-400 w-5 h-5" /> AI Generate Roadmap</h2>
-              <p className="text-xs text-zinc-500 mb-4">Type a topic and your AI engine will generate a structured 5-step learning roadmap, then search the web for real resources for each step. Takes under a minute.</p>
-              <input
+            <TerminalWindow title="AI_GENERATE_ROADMAP" variant="amber">
+              <p className="text-xs text-term-muted mb-4">type a topic and your ai engine will generate a structured 5-step learning roadmap, then search the web for real resources for each step. takes under a minute.</p>
+              <TerminalPromptInput
                 value={generateTopic}
-                onChange={e => setGenerateTopic(e.target.value)}
+                onChange={setGenerateTopic}
                 onKeyDown={e => e.key === 'Enter' && generatePath()}
                 placeholder="e.g. eBPF for Observability, Prometheus, Helm"
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-violet-500 mb-3 text-sm"
+                className="mb-3"
               />
-              <button
-                onClick={generatePath}
-                disabled={generating}
-                className="w-full bg-violet-700 hover:bg-violet-600 disabled:opacity-50 py-2.5 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
-              >
-                {generating ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating…</> : <><Sparkles className="w-4 h-4" /> Generate with AI</>}
-              </button>
-            </div>
+              <TerminalButton solid variant="amber" onClick={generatePath} disabled={generating} className="w-full text-center">
+                <span className="flex items-center justify-center gap-2">
+                  {generating ? <><Loader2 className="w-4 h-4 animate-spin" /> generating…</> : <><Sparkles className="w-4 h-4" /> generate with ai</>}
+                </span>
+              </TerminalButton>
+            </TerminalWindow>
           </div>
 
           {/* Goals list */}
           {goals.length === 0 && (
-            <div className="text-center text-zinc-600 py-16">
+            <div className="text-center text-term-muted py-16">
               <BookOpen className="w-12 h-12 mx-auto mb-3 opacity-40" />
-              <p>No goals yet. Add one above or generate with AI!</p>
+              <p>no goals yet. add one above or generate with ai!</p>
             </div>
           )}
 
@@ -333,64 +332,64 @@ export default function LearningPath() {
               const isExpanded = expandedGoal === goal.id
               const doneSteps = goal.steps.filter(s => s.completed).length
               return (
-                <div key={goal.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-lg">
+                <TerminalWindow key={goal.id} noPadding>
                   {/* Header */}
                   <div
-                    className="flex items-center gap-4 p-5 cursor-pointer hover:bg-zinc-800/50 transition-colors"
+                    className="flex items-center gap-4 p-4 cursor-pointer hover:bg-term-muted/10 transition-colors"
                     onClick={() => setExpandedGoal(isExpanded ? null : goal.id)}
                   >
-                    <div className="w-3 h-12 rounded-full flex-shrink-0" style={{ background: goal.color }} />
+                    <div className="w-2 h-12 flex-shrink-0" style={{ background: goal.color }} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-bold text-lg">{goal.title}</h3>
+                        <h3 className="font-bold text-base text-term-primary">{goal.title}</h3>
                         {goal.status === 'completed' && (
-                          <span className="text-xs bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                            <Trophy className="w-3 h-3" /> Completed
-                          </span>
+                          <StatusTag variant="primary">
+                            <span className="inline-flex items-center gap-1"><Trophy className="w-3 h-3" /> completed</span>
+                          </StatusTag>
                         )}
                       </div>
-                      {goal.description && <p className="text-zinc-400 text-sm mt-0.5 truncate">{goal.description}</p>}
+                      {goal.description && <p className="text-term-muted text-xs mt-0.5 truncate">{goal.description}</p>}
                       {/* Progress bar */}
                       <div className="flex items-center gap-3 mt-2">
-                        <div className="flex-1 bg-zinc-800 rounded-full h-2">
+                        <div className="flex-1 bg-term-border/40 h-1.5">
                           <div
-                            className="h-2 rounded-full transition-all"
+                            className="h-1.5 transition-all"
                             style={{ width: `${goal.progress}%`, background: goal.color }}
                           />
                         </div>
-                        <span className="text-xs text-zinc-400 font-bold whitespace-nowrap">{goal.progress}% · {doneSteps}/{goal.steps.length} steps</span>
+                        <span className="text-[10px] text-term-muted font-bold whitespace-nowrap">{goal.progress}% · {doneSteps}/{goal.steps.length} steps</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      <button onClick={e => { e.stopPropagation(); deleteGoal(goal.id) }} className="p-2 text-zinc-600 hover:text-red-400 rounded-lg transition-colors cursor-pointer">
+                      <button onClick={e => { e.stopPropagation(); deleteGoal(goal.id) }} className="p-1.5 text-term-muted hover:text-term-error transition-colors cursor-pointer">
                         <Trash2 className="w-4 h-4" />
                       </button>
-                      {isExpanded ? <ChevronUp className="w-5 h-5 text-zinc-500" /> : <ChevronDown className="w-5 h-5 text-zinc-500" />}
+                      {isExpanded ? <ChevronUp className="w-4 h-4 text-term-muted" /> : <ChevronDown className="w-4 h-4 text-term-muted" />}
                     </div>
                   </div>
 
                   {/* Steps */}
                   {isExpanded && (
-                    <div className="border-t border-zinc-800 p-5 space-y-2 bg-zinc-950/50">
-                      {goal.steps.length === 0 && <p className="text-zinc-600 text-sm italic">No steps yet. Add one below.</p>}
+                    <div className="border-t border-dashed border-term-border p-4 space-y-1">
+                      {goal.steps.length === 0 && <p className="text-term-muted text-sm italic">no steps yet. add one below.</p>}
                       {goal.steps.map((step, idx) => (
                         <div
                           key={step.id}
-                          className="flex items-start gap-3 p-3 rounded-lg hover:bg-zinc-800/60 transition-colors group"
+                          className="flex items-start gap-3 p-2.5 hover:bg-term-muted/10 transition-colors group"
                         >
                           <button
                             onClick={() => toggleStep(step.id, !step.completed)}
                             className="mt-0.5 flex-shrink-0 cursor-pointer"
                           >
                             {step.completed
-                              ? <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                              : <Circle className="w-5 h-5 text-zinc-600 group-hover:text-zinc-400" />}
+                              ? <CheckCircle2 className="w-4 h-4 text-term-primary" />
+                              : <Circle className="w-4 h-4 text-term-muted group-hover:text-term-primary/60" />}
                           </button>
                           <div className="flex-1 min-w-0">
-                            <p className={`font-semibold text-sm ${step.completed ? 'line-through text-zinc-600' : 'text-zinc-200'}`}>
+                            <p className={`font-semibold text-sm ${step.completed ? 'line-through text-term-muted' : 'text-term-primary/90'}`}>
                               {idx + 1}. {step.title}
                             </p>
-                            {step.description && <p className="text-xs text-zinc-500 mt-0.5">{step.description}</p>}
+                            {step.description && <p className="text-xs text-term-muted mt-0.5">{step.description}</p>}
 
                             {step.resources && step.resources.length > 0 ? (
                               <div className="mt-2 space-y-1">
@@ -400,7 +399,7 @@ export default function LearningPath() {
                                     href={r.url}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 hover:underline truncate"
+                                    className="flex items-center gap-1.5 text-xs text-term-amber hover:underline truncate"
                                   >
                                     <ExternalLink className="w-3 h-3 flex-shrink-0" /> {r.title}
                                   </a>
@@ -410,34 +409,31 @@ export default function LearningPath() {
                               <button
                                 onClick={() => findResources(goal.id, step.id)}
                                 disabled={findingResourcesFor === step.id}
-                                className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-yellow-400 disabled:opacity-50 mt-2 cursor-pointer"
+                                className="flex items-center gap-1.5 text-xs text-term-muted hover:text-term-amber disabled:opacity-50 mt-2 cursor-pointer"
                               >
                                 <Search className={`w-3 h-3 ${findingResourcesFor === step.id ? 'animate-spin' : ''}`} />
-                                {findingResourcesFor === step.id ? 'Searching...' : 'Find resources'}
+                                {findingResourcesFor === step.id ? 'searching...' : 'find resources'}
                               </button>
                             )}
                           </div>
                         </div>
                       ))}
                       {/* Add step */}
-                      <div className="flex gap-2 mt-3 pt-3 border-t border-zinc-800">
-                        <input
+                      <div className="flex gap-2 mt-3 pt-3 border-t border-dashed border-term-border items-center">
+                        <TerminalPromptInput
                           value={newStepTexts[goal.id] || ''}
-                          onChange={e => setNewStepTexts(prev => ({ ...prev, [goal.id]: e.target.value }))}
+                          onChange={v => setNewStepTexts(prev => ({ ...prev, [goal.id]: v }))}
                           onKeyDown={e => e.key === 'Enter' && addStep(goal.id)}
-                          placeholder="Add a step…"
-                          className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                          placeholder="add a step…"
+                          className="flex-1"
                         />
-                        <button
-                          onClick={() => addStep(goal.id)}
-                          className="bg-yellow-700 hover:bg-yellow-600 px-3 py-2 rounded-lg font-bold text-sm cursor-pointer"
-                        >
-                          <Plus className="w-4 h-4" />
-                        </button>
+                        <TerminalButton size="sm" onClick={() => addStep(goal.id)}>
+                          <Plus className="w-3.5 h-3.5" />
+                        </TerminalButton>
                       </div>
                     </div>
                   )}
-                </div>
+                </TerminalWindow>
               )
             })}
           </div>
@@ -450,152 +446,149 @@ export default function LearningPath() {
           {/* Stats */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: 'Hours This Month', value: `${totalHours}h`, icon: <Clock className="w-5 h-5" />, color: 'yellow' },
-              { label: 'Active Days', value: activeDays, icon: <Calendar className="w-5 h-5" />, color: 'blue' },
-              { label: 'Total Sessions', value: timeLogs.length, icon: <BarChart2 className="w-5 h-5" />, color: 'violet' },
-              { label: 'Goals Tracking', value: goals.length, icon: <Target className="w-5 h-5" />, color: 'emerald' },
+              { label: 'Hours This Month', value: `${totalHours}h`, icon: Clock },
+              { label: 'Active Days', value: activeDays, icon: Calendar },
+              { label: 'Total Sessions', value: timeLogs.length, icon: BarChart2 },
+              { label: 'Goals Tracking', value: goals.length, icon: Target },
             ].map(s => (
-              <div key={s.label} className={`bg-zinc-900 border border-${s.color}-900/40 rounded-xl p-4 flex items-center gap-4`}>
-                <div className={`text-${s.color}-400`}>{s.icon}</div>
+              <div key={s.label} className="border border-term-border p-4 flex items-center gap-4">
+                <div className="text-term-primary"><s.icon className="w-5 h-5" /></div>
                 <div>
-                  <div className={`text-2xl font-extrabold text-${s.color}-400`}>{s.value}</div>
-                  <div className="text-xs text-zinc-500">{s.label}</div>
+                  <div className="text-xl font-extrabold text-term-primary">{s.value}</div>
+                  <div className="text-[10px] text-term-muted uppercase tracking-wide">{s.label}</div>
                 </div>
               </div>
             ))}
           </div>
 
           {/* Log time */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-            <h2 className="font-bold text-lg mb-4 flex items-center gap-2"><Clock className="text-yellow-400 w-5 h-5" /> Log Study Session</h2>
+          <TerminalWindow title="LOG_STUDY_SESSION">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Date</label>
+                <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Date</label>
                 <input
                   type="date"
                   value={logDate}
                   onChange={e => setLogDate(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm"
+                  className="w-full bg-term-bg border border-term-border p-2.5 text-term-primary focus:outline-none focus:border-term-primary text-sm font-term"
                 />
               </div>
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Duration (minutes)</label>
+                <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Duration (minutes)</label>
                 <input
                   type="number"
                   min="1"
                   value={logMinutes}
                   onChange={e => setLogMinutes(e.target.value)}
                   placeholder="e.g. 45"
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm"
+                  className="w-full bg-term-bg border border-term-border p-2.5 text-term-primary placeholder:text-term-muted focus:outline-none focus:border-term-primary text-sm font-term"
                 />
               </div>
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Goal (optional)</label>
+                <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Goal (optional)</label>
                 <select
                   value={logGoalId}
                   onChange={e => setLogGoalId(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm cursor-pointer"
+                  className="w-full bg-term-bg border border-term-border p-2.5 text-term-primary focus:outline-none focus:border-term-primary text-sm font-term cursor-pointer"
                 >
                   <option value="">— Unlinked —</option>
                   {goals.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Notes (optional)</label>
+                <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Notes (optional)</label>
                 <input
                   value={logNotes}
                   onChange={e => setLogNotes(e.target.value)}
-                  placeholder="What did you study?"
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm"
+                  placeholder="what did you study?"
+                  className="w-full bg-term-bg border border-term-border p-2.5 text-term-primary placeholder:text-term-muted focus:outline-none focus:border-term-primary text-sm font-term"
                 />
               </div>
             </div>
-            <button
+            <TerminalButton
+              solid
               onClick={logTime}
               disabled={savingLog || !logMinutes}
-              className="mt-4 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 px-6 py-2.5 rounded-lg font-bold text-sm flex items-center gap-2 cursor-pointer transition-colors"
+              className="mt-4"
             >
-              {savingLog ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-              Log Session
-            </button>
-          </div>
+              <span className="flex items-center gap-2">
+                {savingLog ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                log session
+              </span>
+            </TerminalButton>
+          </TerminalWindow>
 
           {/* Bar chart: daily hours */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-            <h2 className="font-bold text-lg mb-6 flex items-center gap-2">
-              <BarChart2 className="text-blue-400 w-5 h-5" /> {monthName} — Daily Study Time
-            </h2>
+          <TerminalWindow title={`${monthName.toUpperCase()} — DAILY STUDY TIME`}>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={monthlyChartData} barSize={18}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="day" tick={{ fill: '#71717a', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#71717a', fontSize: 11 }} unit="h" />
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                <XAxis dataKey="day" tick={CHART_TICK} />
+                <YAxis tick={CHART_TICK} unit="h" />
                 <Tooltip
-                  contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8 }}
-                  labelStyle={{ color: '#a1a1aa' }}
+                  contentStyle={CHART_TOOLTIP_STYLE}
+                  labelStyle={{ color: '#a8f090' }}
+                  itemStyle={{ color: '#33ff00' }}
                   formatter={(val: any) => [`${val}h`, 'Study Time']}
                   labelFormatter={(l: any) => `Day ${l}`}
                 />
-                <Bar dataKey="hours" radius={[4, 4, 0, 0]}>
+                <Bar dataKey="hours" radius={[0, 0, 0, 0]}>
                   {monthlyChartData.map((entry, index) => (
-                    <Cell key={index} fill={entry.hours > 0 ? '#facc15' : '#27272a'} />
+                    <Cell key={index} fill={entry.hours > 0 ? '#33ff00' : '#1f521f'} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-          </div>
+          </TerminalWindow>
 
           {/* Goal breakdown */}
           {goalBreakdown.length > 0 && (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-              <h2 className="font-bold text-lg mb-6 flex items-center gap-2">
-                <Target className="text-violet-400 w-5 h-5" /> Hours by Goal (All Time)
-              </h2>
+            <TerminalWindow title="HOURS_BY_GOAL_ALL_TIME" variant="amber">
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={goalBreakdown} layout="vertical" barSize={16}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
-                  <XAxis type="number" tick={{ fill: '#71717a', fontSize: 11 }} unit="h" />
-                  <YAxis dataKey="name" type="category" width={160} tick={{ fill: '#a1a1aa', fontSize: 11 }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} horizontal={false} />
+                  <XAxis type="number" tick={CHART_TICK} unit="h" />
+                  <YAxis dataKey="name" type="category" width={160} tick={CHART_TICK} />
                   <Tooltip
-                    contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 8 }}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    itemStyle={{ color: '#ffb000' }}
                     formatter={(val: any) => [`${val}h`, 'Hours']}
                   />
-                  <Bar dataKey="hours" radius={[0, 4, 4, 0]}>
+                  <Bar dataKey="hours" radius={[0, 0, 0, 0]}>
                     {goalBreakdown.map((_, i) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </div>
+            </TerminalWindow>
           )}
 
           {/* Recent sessions */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-            <h2 className="font-bold text-lg mb-4 flex items-center gap-2"><Clock className="text-emerald-400 w-5 h-5" /> Recent Sessions</h2>
+          <TerminalWindow title="RECENT_SESSIONS">
             {timeLogs.length === 0 && (
-              <p className="text-zinc-600 text-sm italic">No sessions logged yet.</p>
+              <p className="text-term-muted text-sm italic">no sessions logged yet.</p>
             )}
             <div className="space-y-2">
               {timeLogs.slice(0, 20).map(log => (
-                <div key={log.id} className="flex items-center justify-between p-3 bg-zinc-950 rounded-lg border border-zinc-800 group">
+                <div key={log.id} className="flex items-center justify-between p-3 border border-term-border group">
                   <div className="flex items-center gap-3">
-                    <Clock className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+                    <Clock className="w-4 h-4 text-term-primary flex-shrink-0" />
                     <div>
-                      <p className="text-sm font-semibold">{log.duration_minutes} min {log.goal_title ? `— ${log.goal_title}` : ''}</p>
-                      {log.notes && <p className="text-xs text-zinc-500">{log.notes}</p>}
+                      <p className="text-sm font-semibold text-term-primary/90">{log.duration_minutes} min {log.goal_title ? `— ${log.goal_title}` : ''}</p>
+                      {log.notes && <p className="text-xs text-term-muted">{log.notes}</p>}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-xs text-zinc-500">{new Date(log.log_date).toLocaleDateString()}</span>
-                    <button onClick={() => deleteLog(log.id)} className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all cursor-pointer">
+                    <span className="text-xs text-term-muted">{new Date(log.log_date).toLocaleDateString()}</span>
+                    <button onClick={() => deleteLog(log.id)} className="opacity-0 group-hover:opacity-100 text-term-muted hover:text-term-error transition-all cursor-pointer">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
               ))}
             </div>
-          </div>
+          </TerminalWindow>
         </div>
       )}
       {/* ────────────── CHECK-INS TAB ────────────── */}
@@ -607,7 +600,7 @@ export default function LearningPath() {
 }
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const FREQ_COLORS: Record<string, string> = { daily: '#10b981', weekly: '#3b82f6', monthly: '#8b5cf6' }
+const FREQ_VARIANT: Record<string, 'primary' | 'amber' | 'error'> = { daily: 'primary', weekly: 'amber', monthly: 'error' }
 
 function CheckInsTab({ goals, checkIns, setCheckIns }: {
   goals: any[]
@@ -683,85 +676,83 @@ function CheckInsTab({ goals, checkIns, setCheckIns }: {
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Active Check-ins', value: checkIns.length, icon: <Bell className="w-5 h-5" />, color: 'yellow' },
-          { label: 'Done Today', value: `${doneToday}/${checkIns.length}`, icon: <CheckCircle2 className="w-5 h-5" />, color: 'emerald' },
-          { label: 'Total Streaks', value: totalStreaks, icon: <Repeat className="w-5 h-5" />, color: 'blue' },
-          { label: 'Goals Linked', value: checkIns.filter(c => c.goalId).length, icon: <Target className="w-5 h-5" />, color: 'violet' },
+          { label: 'Active Check-ins', value: checkIns.length, icon: Bell },
+          { label: 'Done Today', value: `${doneToday}/${checkIns.length}`, icon: CheckCircle2 },
+          { label: 'Total Streaks', value: totalStreaks, icon: Repeat },
+          { label: 'Goals Linked', value: checkIns.filter(c => c.goalId).length, icon: Target },
         ].map(s => (
-          <div key={s.label} className={`bg-zinc-900 border border-${s.color}-900/40 rounded-xl p-4 flex items-center gap-3`}>
-            <div className={`text-${s.color}-400`}>{s.icon}</div>
+          <div key={s.label} className="border border-term-border p-4 flex items-center gap-3">
+            <div className="text-term-primary"><s.icon className="w-5 h-5" /></div>
             <div>
-              <div className={`text-2xl font-extrabold text-${s.color}-400`}>{s.value}</div>
-              <div className="text-xs text-zinc-500">{s.label}</div>
+              <div className="text-xl font-extrabold text-term-primary">{s.value}</div>
+              <div className="text-[10px] text-term-muted uppercase tracking-wide">{s.label}</div>
             </div>
           </div>
         ))}
       </div>
 
       {/* Add new check-in */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <h2 className="font-bold text-lg mb-4 flex items-center gap-2"><Plus className="text-yellow-400 w-5 h-5" /> Schedule a Check-in</h2>
+      <TerminalWindow title="SCHEDULE_A_CHECK-IN">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="text-xs text-zinc-500 mb-1 block">Title *</label>
+            <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Title *</label>
             <input value={newTitle} onChange={e => setNewTitle(e.target.value)}
               placeholder="e.g. Review SRE metrics"
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500" />
+              className="w-full bg-term-bg border border-term-border p-2.5 text-sm text-term-primary placeholder:text-term-muted focus:outline-none focus:border-term-primary font-term" />
           </div>
           <div>
-            <label className="text-xs text-zinc-500 mb-1 block">Description</label>
+            <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Description</label>
             <input value={newDesc} onChange={e => setNewDesc(e.target.value)}
               placeholder="What to do during this check-in"
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500" />
+              className="w-full bg-term-bg border border-term-border p-2.5 text-sm text-term-primary placeholder:text-term-muted focus:outline-none focus:border-term-primary font-term" />
           </div>
           <div>
-            <label className="text-xs text-zinc-500 mb-1 block">Frequency</label>
+            <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Frequency</label>
             <select value={newFreq} onChange={e => setNewFreq(e.target.value as any)}
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500 cursor-pointer">
+              className="w-full bg-term-bg border border-term-border p-2.5 text-sm text-term-primary focus:outline-none focus:border-term-primary font-term cursor-pointer">
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
               <option value="monthly">Monthly</option>
             </select>
           </div>
           <div>
-            <label className="text-xs text-zinc-500 mb-1 block">Time</label>
+            <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Time</label>
             <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500" />
+              className="w-full bg-term-bg border border-term-border p-2.5 text-sm text-term-primary focus:outline-none focus:border-term-primary font-term" />
           </div>
           <div>
-            <label className="text-xs text-zinc-500 mb-1 block">Linked Goal (optional)</label>
+            <label className="text-[10px] text-term-muted mb-1 block uppercase tracking-wide">Linked Goal (optional)</label>
             <select value={newGoalId} onChange={e => setNewGoalId(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-yellow-500 cursor-pointer">
+              className="w-full bg-term-bg border border-term-border p-2.5 text-sm text-term-primary focus:outline-none focus:border-term-primary font-term cursor-pointer">
               <option value="">— None —</option>
               {goals.map(g => <option key={g.id} value={g.id}>{g.title}</option>)}
             </select>
           </div>
           {newFreq === 'weekly' && (
             <div>
-              <label className="text-xs text-zinc-500 mb-2 block">Days of Week</label>
-              <div className="flex gap-2 flex-wrap">
+              <label className="text-[10px] text-term-muted mb-2 block uppercase tracking-wide">Days of Week</label>
+              <div className="flex gap-1.5 flex-wrap">
                 {DAY_LABELS.map((d, i) => (
-                  <button key={i} onClick={() => toggleDay(i)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer
-                      ${newDays.includes(i) ? 'bg-yellow-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>
-                    {d}
-                  </button>
+                  <TerminalButton key={i} size="sm" solid={newDays.includes(i)} onClick={() => toggleDay(i)}>
+                    {d.toLowerCase()}
+                  </TerminalButton>
                 ))}
               </div>
             </div>
           )}
         </div>
-        <button onClick={addCheckIn}
-          className="mt-4 bg-yellow-600 hover:bg-yellow-500 px-6 py-2.5 rounded-lg font-bold text-sm cursor-pointer transition-colors flex items-center gap-2">
-          <AlarmClock className="w-4 h-4" /> Schedule Check-in
-        </button>
-      </div>
+        <TerminalButton solid onClick={addCheckIn} className="mt-4">
+          <span className="flex items-center gap-2">
+            <AlarmClock className="w-4 h-4" /> schedule check-in
+          </span>
+        </TerminalButton>
+      </TerminalWindow>
 
       {/* Check-ins list */}
       {checkIns.length === 0 && (
-        <div className="text-center py-16 text-zinc-600">
+        <div className="text-center py-16 text-term-muted">
           <Bell className="w-12 h-12 mx-auto mb-3 opacity-40" />
-          <p>No check-ins scheduled. Add one above!</p>
+          <p>no check-ins scheduled. add one above!</p>
         </div>
       )}
 
@@ -769,25 +760,22 @@ function CheckInsTab({ goals, checkIns, setCheckIns }: {
         {checkIns.map(ci => {
           const done = isDoneToday(ci.id)
           const linkedGoal = goals.find(g => g.id === ci.goalId)
-          const freqColor = FREQ_COLORS[ci.frequency]
           return (
-            <div key={ci.id} className={`bg-zinc-900 border rounded-xl p-5 flex items-start justify-between gap-4 transition-all
-              ${done ? 'border-emerald-900/50 bg-emerald-950/10' : 'border-zinc-800'}`}>
+            <div key={ci.id} className={`border p-4 flex items-start justify-between gap-4 transition-all
+              ${done ? 'border-term-primary/50 bg-term-primary/5' : 'border-term-border'}`}>
               <div className="flex items-start gap-4 flex-1 min-w-0">
                 <button onClick={() => markDone(ci.id)}
-                  className={`mt-0.5 flex-shrink-0 cursor-pointer transition-colors ${done ? 'text-emerald-400' : 'text-zinc-600 hover:text-yellow-400'}`}>
-                  {done ? <CheckCircle2 className="w-6 h-6" /> : <Circle className="w-6 h-6" />}
+                  className={`mt-0.5 flex-shrink-0 cursor-pointer transition-colors ${done ? 'text-term-primary' : 'text-term-muted hover:text-term-amber'}`}>
+                  {done ? <CheckCircle2 className="w-5 h-5" /> : <Circle className="w-5 h-5" />}
                 </button>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <h3 className={`font-bold text-base ${done ? 'line-through text-zinc-500' : ''}`}>{ci.title}</h3>
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: freqColor }}>
-                      {ci.frequency}
-                    </span>
-                    {done && <span className="text-xs bg-emerald-900/50 text-emerald-400 border border-emerald-800 px-2 py-0.5 rounded-full font-bold">✓ Done today</span>}
+                    <h3 className={`font-bold text-sm ${done ? 'line-through text-term-muted' : 'text-term-primary'}`}>{ci.title}</h3>
+                    <StatusTag variant={FREQ_VARIANT[ci.frequency]}>{ci.frequency}</StatusTag>
+                    {done && <StatusTag variant="primary">done today</StatusTag>}
                   </div>
-                  {ci.description && <p className="text-xs text-zinc-500 mb-2">{ci.description}</p>}
-                  <div className="flex items-center gap-3 text-xs text-zinc-500 flex-wrap">
+                  {ci.description && <p className="text-xs text-term-muted mb-2">{ci.description}</p>}
+                  <div className="flex items-center gap-3 text-xs text-term-muted flex-wrap">
                     <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {ci.time}</span>
                     {ci.frequency === 'weekly' && ci.days?.length > 0 && (
                       <span className="flex items-center gap-1">
@@ -799,13 +787,13 @@ function CheckInsTab({ goals, checkIns, setCheckIns }: {
                       <span className="flex items-center gap-1"><Target className="w-3 h-3" /> {linkedGoal.title}</span>
                     )}
                     {ci.streak > 0 && (
-                      <span className="flex items-center gap-1 text-yellow-400 font-bold">🔥 {ci.streak} streak</span>
+                      <span className="flex items-center gap-1 text-term-amber font-bold">streak: {ci.streak}</span>
                     )}
                   </div>
                 </div>
               </div>
               <button onClick={() => deleteCheckIn(ci.id)}
-                className="text-zinc-600 hover:text-red-400 transition-colors cursor-pointer flex-shrink-0">
+                className="text-term-muted hover:text-term-error transition-colors cursor-pointer flex-shrink-0">
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>

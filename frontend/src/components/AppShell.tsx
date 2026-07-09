@@ -2,18 +2,19 @@
 import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { LogOut, RefreshCw } from 'lucide-react'
+import { LogOut, RefreshCw, LayoutDashboard, Network, Brain, GraduationCap, Settings as SettingsIcon } from 'lucide-react'
 import { getToken, logout } from '@/lib/api'
+import { Logo } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 const PUBLIC_ROUTES = ['/login', '/signup']
 
 const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard', emoji: '🏠' },
-  { href: '/knowledge', label: 'Knowledge Graph', emoji: '🕸️' },
-  { href: '/quiz', label: 'Recall Quiz', emoji: '🧠' },
-  { href: '/learning', label: 'Learning Path', emoji: '🎓' },
-  { href: '/settings', label: 'Settings', emoji: '⚙️' },
+  { href: '/', label: 'dashboard', icon: LayoutDashboard },
+  { href: '/knowledge', label: 'knowledge graph', icon: Network },
+  { href: '/quiz', label: 'recall quiz', icon: Brain },
+  { href: '/learning', label: 'learning path', icon: GraduationCap },
+  { href: '/settings', label: 'settings', icon: SettingsIcon },
 ]
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -56,34 +57,41 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (checking) {
     return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-[#09090b] text-zinc-500">
+      <div className="min-h-screen w-full flex items-center justify-center bg-term-bg text-term-muted font-term">
         <RefreshCw className="w-6 h-6 animate-spin" />
       </div>
     )
   }
 
   return (
-    <div className="flex min-h-screen w-full">
-      <aside className="w-56 bg-zinc-950 border-r border-zinc-800 p-5 flex flex-col gap-1 sticky top-0 h-screen overflow-y-auto flex-shrink-0">
-        <div className="font-extrabold text-lg mb-6 text-emerald-400 tracking-tight flex items-center gap-2">
-          <span className="text-2xl">⚡</span> SRE AI OS
+    <div className="flex min-h-screen w-full bg-term-bg font-term term-scanlines">
+      <aside className="w-56 bg-term-bg border-r border-term-border p-4 flex flex-col gap-1 sticky top-0 h-screen overflow-y-auto flex-shrink-0">
+        <div className="mb-6 px-1">
+          <Logo size="sm" />
         </div>
-        {NAV_ITEMS.map(item => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-zinc-800 hover:text-emerald-400 transition-all text-zinc-400 text-sm font-medium"
-          >
-            <span className="text-base">{item.emoji}</span> {item.label}
-          </Link>
-        ))}
-        <div className="mt-auto pt-4 border-t border-zinc-800">
-          <p className="px-3 text-[11px] text-zinc-600 truncate mb-1">{email}</p>
+        {NAV_ITEMS.map(item => {
+          const active = pathname === item.href
+          const Icon = item.icon
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-2.5 px-3 py-2 border text-xs font-bold uppercase tracking-wide transition-colors
+                ${active
+                  ? 'bg-term-primary text-term-bg border-term-primary'
+                  : 'border-transparent text-term-muted hover:text-term-primary hover:border-term-border'}`}
+            >
+              <Icon className="w-3.5 h-3.5 flex-shrink-0" /> {item.label}
+            </Link>
+          )
+        })}
+        <div className="mt-auto pt-4 border-t border-dashed border-term-border">
+          <p className="px-3 text-[10px] text-term-muted truncate mb-1 font-term">$ whoami<br />{email}</p>
           <button
             onClick={logout}
-            className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-zinc-800 hover:text-red-400 transition-all text-zinc-400 text-sm font-medium cursor-pointer"
+            className="w-full flex items-center gap-2.5 px-3 py-2 border border-transparent hover:border-term-error hover:text-term-error transition-colors text-term-muted text-xs font-bold uppercase tracking-wide cursor-pointer"
           >
-            <LogOut className="w-4 h-4" /> Log Out
+            <LogOut className="w-3.5 h-3.5" /> log out
           </button>
         </div>
       </aside>

@@ -2,8 +2,9 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Terminal, UserPlus } from 'lucide-react'
+import { UserPlus } from 'lucide-react'
 import { setToken } from '@/lib/api'
+import { Logo, TerminalWindow, TerminalButton, TerminalPromptInput } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -44,71 +45,45 @@ export default function Signup() {
   }
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 flex items-center justify-center p-6 font-sans">
+    <div className="min-h-screen bg-term-bg text-term-primary flex items-center justify-center p-6 font-term term-scanlines">
       <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 text-2xl font-extrabold text-emerald-400">
-            <Terminal className="w-7 h-7" /> SRE AI OS
-          </div>
-          <p className="text-zinc-500 text-sm mt-2">
-            Create an account. Note: everyone who signs up shares the same vault, goals, and settings — this app protects who gets in, not per-person data.
+        <div className="mb-8">
+          <Logo size="lg" />
+          <p className="text-term-muted text-xs mt-4 text-center">
+            $ auth --signup<br />
+            <span className="text-[10px]">note: everyone who signs up shares the same vault, goals &amp; settings — this app protects who gets in, not per-person data.</span>
           </p>
         </div>
-        <form onSubmit={handleSubmit} className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold mb-1.5 text-zinc-400">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1.5 text-zinc-400">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              minLength={8}
-              required
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-            <p className="text-[10px] text-zinc-600 mt-1">At least 8 characters.</p>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1.5 text-zinc-400">Confirm Password</label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={e => setConfirmPassword(e.target.value)}
-              required
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold mb-1.5 text-zinc-400">Invite Code</label>
-            <input
-              type="password"
-              value={inviteCode}
-              onChange={e => setInviteCode(e.target.value)}
-              required
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-            <p className="text-[10px] text-zinc-600 mt-1">Ask whoever runs this instance for the invite code.</p>
-          </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 py-2.5 rounded-lg font-bold text-sm transition-colors cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4" /> {loading ? 'Creating account...' : 'Sign Up'}
-          </button>
-        </form>
-        <p className="text-center text-xs text-zinc-500 mt-4">
-          Already have an account? <Link href="/login" className="text-emerald-400 hover:underline">Sign in</Link>
+        <TerminalWindow>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-[10px] font-bold mb-1.5 text-term-muted uppercase tracking-wide">email</label>
+              <TerminalPromptInput value={email} onChange={setEmail} type="email" prompt=">" required />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold mb-1.5 text-term-muted uppercase tracking-wide">password</label>
+              <TerminalPromptInput value={password} onChange={setPassword} type="password" prompt=">" required minLength={8} />
+              <p className="text-[10px] text-term-muted mt-1">min 8 characters.</p>
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold mb-1.5 text-term-muted uppercase tracking-wide">confirm password</label>
+              <TerminalPromptInput value={confirmPassword} onChange={setConfirmPassword} type="password" prompt=">" required />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold mb-1.5 text-term-muted uppercase tracking-wide">invite code</label>
+              <TerminalPromptInput value={inviteCode} onChange={setInviteCode} type="password" prompt=">" required />
+              <p className="text-[10px] text-term-muted mt-1">ask whoever runs this instance for the invite code.</p>
+            </div>
+            {error && <p className="text-xs text-term-error">[ ERR ] {error}</p>}
+            <TerminalButton solid variant="amber" type="submit" disabled={loading} className="w-full text-center">
+              <span className="flex items-center justify-center gap-2">
+                <UserPlus className="w-4 h-4" /> {loading ? 'creating account...' : 'sign up'}
+              </span>
+            </TerminalButton>
+          </form>
+        </TerminalWindow>
+        <p className="text-center text-xs text-term-muted mt-4">
+          already have an account? <Link href="/login" className="text-term-amber hover:underline">sign in</Link>
         </p>
       </div>
     </div>

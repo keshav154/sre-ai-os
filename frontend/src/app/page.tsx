@@ -724,7 +724,7 @@ export default function Dashboard() {
   const totalUnfiltered = unviewedFeed.filter((item: any) => sourceFilter === 'All' || item.source === sourceFilter).length
 
   return (
-    <div className="min-h-screen bg-term-bg text-term-primary p-6 font-term term-scanlines">
+    <div className="min-h-screen bg-term-bg text-term-primary p-6 font-term">
       {/* Toast notification */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 border font-bold text-sm max-w-sm bg-term-bg

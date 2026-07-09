@@ -4,6 +4,7 @@ import { apiFetch } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Network, RefreshCw, Info, MessageCircleQuestion, Send, Database, Brain, X } from 'lucide-react'
+import { TerminalWindow, TerminalButton, StatusTag, Blinker } from '@/components/terminal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -28,12 +29,14 @@ interface GraphData {
   links: GraphLink[]
 }
 
-// Color map
+// Color map — kept to the terminal palette (green/amber/error) plus a
+// neutral off-white for generic article/web nodes, since these colors are
+// functional (distinguish node types), not decorative.
 const NODE_COLORS: Record<string, string> = {
-  keyword: '#10b981',
-  YouTube: '#ef4444',
-  Medium: '#f59e0b',
-  article: '#6366f1',
+  keyword: '#33ff00',
+  YouTube: '#ff3333',
+  Medium: '#ffb000',
+  article: '#d4d4d4',
 }
 
 export default function KnowledgeGraph() {
@@ -216,7 +219,7 @@ export default function KnowledgeGraph() {
         const pb = positions.get(tgt)
         if (!pa || !pb) return
         ctx.beginPath()
-        ctx.strokeStyle = 'rgba(52,211,153,0.2)'
+        ctx.strokeStyle = 'rgba(51,255,0,0.15)'
         ctx.lineWidth = 1
         ctx.moveTo(pa.x, pa.y)
         ctx.lineTo(pb.x, pb.y)
@@ -229,7 +232,7 @@ export default function KnowledgeGraph() {
         const isKeyword = node.type === 'keyword'
         const isHovered = hoveredNode?.id === node.id
         const r = isKeyword ? 18 : 10
-        const color = isKeyword ? '#10b981' : (NODE_COLORS[node.source || ''] || '#6366f1')
+        const color = isKeyword ? '#33ff00' : (NODE_COLORS[node.source || ''] || '#d4d4d4')
 
         // Glow
         if (isKeyword || isHovered) {
@@ -242,7 +245,7 @@ export default function KnowledgeGraph() {
           ctx.fill()
         }
 
-        // Node circle
+        // Node square (no rounded shapes — terminal glyph aesthetic)
         ctx.beginPath()
         ctx.arc(p.x, p.y, isHovered ? r + 3 : r, 0, 2 * Math.PI)
         ctx.fillStyle = color
@@ -252,8 +255,8 @@ export default function KnowledgeGraph() {
         ctx.stroke()
 
         // Label
-        ctx.fillStyle = isKeyword ? '#fff' : '#a1a1aa'
-        ctx.font = isKeyword ? 'bold 11px Inter, sans-serif' : '9px Inter, sans-serif'
+        ctx.fillStyle = isKeyword ? '#fff' : '#a8f090'
+        ctx.font = isKeyword ? 'bold 11px "JetBrains Mono", monospace' : '9px "JetBrains Mono", monospace'
         ctx.textAlign = 'center'
         const label = node.label.length > 22 ? node.label.slice(0, 22) + '…' : node.label
         ctx.fillText(label, p.x, p.y + r + 12)
@@ -296,138 +299,133 @@ export default function KnowledgeGraph() {
   const articles = total - keywords
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 p-6 font-sans flex flex-col gap-6">
+    <div className="min-h-screen bg-term-bg text-term-primary p-6 font-term flex flex-col gap-6">
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-extrabold flex items-center gap-3">
-            <Network className="text-purple-400 w-8 h-8" /> Knowledge Graph
+          <h1 className="text-2xl font-extrabold flex items-center gap-2 uppercase term-glow">
+            <Network className="w-6 h-6" /> KNOWLEDGE_GRAPH<Blinker className="ml-0.5" />
           </h1>
-          <p className="text-zinc-400 mt-1 text-sm">
-            Interactive 2D map of your topics, articles &amp; connections
+          <p className="text-term-muted mt-1 text-xs">
+            root@sre-ai-os:~$ map --topics --articles --connections
           </p>
         </div>
-        <button
-          onClick={fetchGraph}
-          className="flex items-center gap-2 bg-purple-700 hover:bg-purple-600 px-4 py-2 rounded-lg font-bold transition-colors cursor-pointer text-sm"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </button>
+        <TerminalButton solid onClick={fetchGraph}>
+          <span className="flex items-center gap-2">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> refresh
+          </span>
+        </TerminalButton>
       </header>
 
       {/* Stats */}
-      <div className="flex gap-4">
+      <div className="flex gap-4 flex-wrap">
         {[
-          { label: 'Topics', value: keywords, color: 'emerald' },
-          { label: 'Articles', value: articles, color: 'indigo' },
-          { label: 'Connections', value: graphData.links.length, color: 'purple' },
+          { label: 'Topics', value: keywords, variant: 'primary' as const },
+          { label: 'Articles', value: articles, variant: 'muted' as const },
+          { label: 'Connections', value: graphData.links.length, variant: 'amber' as const },
         ].map(s => (
-          <div key={s.label} className={`bg-zinc-900 border border-${s.color}-900/40 rounded-xl px-5 py-3 flex flex-col items-center`}>
-            <span className={`text-2xl font-extrabold text-${s.color}-400`}>{s.value}</span>
-            <span className="text-xs text-zinc-500 mt-0.5">{s.label}</span>
+          <div key={s.label} className="border border-term-border px-5 py-3 flex flex-col items-center">
+            <span className={`text-2xl font-extrabold ${s.variant === 'primary' ? 'text-term-primary' : s.variant === 'amber' ? 'text-term-amber' : 'text-term-muted'}`}>{s.value}</span>
+            <span className="text-[10px] text-term-muted mt-0.5 uppercase tracking-wide">{s.label}</span>
           </div>
         ))}
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-4 text-xs text-zinc-400">
+      <div className="flex items-center gap-4 text-xs text-term-muted flex-wrap">
         {[
-          { color: '#10b981', label: 'Topic Keyword' },
-          { color: '#ef4444', label: 'YouTube' },
-          { color: '#f59e0b', label: 'Medium' },
-          { color: '#6366f1', label: 'Article / Web' },
+          { color: '#33ff00', label: 'Topic Keyword' },
+          { color: '#ff3333', label: 'YouTube' },
+          { color: '#ffb000', label: 'Medium' },
+          { color: '#d4d4d4', label: 'Article / Web' },
         ].map(l => (
           <div key={l.label} className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded-full" style={{ background: l.color }} />
+            <div className="w-2.5 h-2.5" style={{ background: l.color }} />
             {l.label}
           </div>
         ))}
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden relative" style={{ minHeight: 520 }}>
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center z-10 bg-zinc-900/80">
-            <div className="text-center">
-              <RefreshCw className="w-8 h-8 text-purple-400 animate-spin mx-auto mb-3" />
-              <p className="text-zinc-400">Building knowledge graph…</p>
+      <TerminalWindow noPadding className="flex-1 overflow-hidden relative">
+        <div className="relative" style={{ minHeight: 520 }}>
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center z-10 bg-term-bg/90">
+              <div className="text-center">
+                <RefreshCw className="w-8 h-8 text-term-primary animate-spin mx-auto mb-3" />
+                <p className="text-term-muted text-sm">building knowledge graph…</p>
+              </div>
             </div>
-          </div>
-        )}
-        {!loading && graphData.nodes.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-center text-zinc-500">
-              <Info className="w-10 h-10 mx-auto mb-3 opacity-40" />
-              <p>No articles ingested yet.</p>
-              <p className="text-sm mt-1">Run Live Search on the dashboard to populate the graph.</p>
+          )}
+          {!loading && graphData.nodes.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center text-term-muted">
+                <Info className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                <p>no articles ingested yet.</p>
+                <p className="text-sm mt-1">run live search on the dashboard to populate the graph.</p>
+              </div>
             </div>
-          </div>
-        )}
-        <canvas
-          ref={canvasRef}
-          width={1400}
-          height={700}
-          className="w-full h-full"
-          onMouseMove={handleMouseMove}
-          onClick={handleClick}
-        />
-        {hoveredNode && (
-          <div className="absolute bottom-4 left-4 bg-zinc-800/95 border border-zinc-700 rounded-lg px-4 py-2 text-xs max-w-xs backdrop-blur-sm">
-            <p className="font-bold text-white">{hoveredNode.label}</p>
-            {hoveredNode.source && <p className="text-zinc-400">{hoveredNode.source}</p>}
-            {hoveredNode.url && <p className="text-purple-400 mt-0.5">Click to open →</p>}
-          </div>
-        )}
-      </div>
+          )}
+          <canvas
+            ref={canvasRef}
+            width={1400}
+            height={700}
+            className="w-full h-full"
+            onMouseMove={handleMouseMove}
+            onClick={handleClick}
+          />
+          {hoveredNode && (
+            <div className="absolute bottom-4 left-4 bg-term-bg border border-term-border px-4 py-2 text-xs max-w-xs">
+              <p className="font-bold text-term-primary">{hoveredNode.label}</p>
+              {hoveredNode.source && <p className="text-term-muted">{hoveredNode.source}</p>}
+              {hoveredNode.url && <p className="text-term-amber mt-0.5">click to open →</p>}
+            </div>
+          )}
+        </div>
+      </TerminalWindow>
 
       {/* Agent Memory — transparency into what the agents have inferred
           about you over time from the reflect loop, with the ability to
           delete anything you don't want it remembering. */}
       {memories.length > 0 && (
-        <div className="bg-zinc-900 border border-amber-900/40 rounded-xl p-6">
-          <h2 className="text-xl font-bold flex items-center gap-2 mb-1">
-            <Brain className="text-amber-400 w-6 h-6" /> Agent Memory
-          </h2>
-          <p className="text-zinc-400 text-sm mb-4">
-            What the agents have learned about your interests and habits from your activity, used to inform Research Agent answers, liked-item notes, and weekly reflections. Delete anything you don't want remembered.
+        <TerminalWindow title="AGENT_MEMORY" variant="amber">
+          <p className="text-term-muted text-xs mb-4 flex items-center gap-1.5">
+            <Brain className="w-3.5 h-3.5 text-term-amber" /> what the agents have learned about your interests and habits from your activity, used to inform research agent answers, liked-item notes, and weekly reflections. delete anything you don't want remembered.
           </p>
           <div className="space-y-2">
             {memories.map(m => (
-              <div key={m.id} className="flex items-start gap-3 bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5">
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 flex-shrink-0 mt-0.5">
-                  {m.category}
-                </span>
-                <p className="flex-1 text-sm text-zinc-300">{m.content}</p>
+              <div key={m.id} className="flex items-start gap-3 border border-term-border px-4 py-2.5">
+                <StatusTag variant="amber" className="flex-shrink-0 mt-0.5">{m.category}</StatusTag>
+                <p className="flex-1 text-sm text-term-primary/90">{m.content}</p>
                 <button
                   onClick={() => forgetMemory(m.id)}
                   disabled={forgetting === m.id}
                   title="Forget this"
-                  className="text-zinc-600 hover:text-red-400 disabled:opacity-50 cursor-pointer flex-shrink-0"
+                  className="text-term-muted hover:text-term-error disabled:opacity-50 cursor-pointer flex-shrink-0"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
             ))}
           </div>
-        </div>
+        </TerminalWindow>
       )}
 
       {/* Ask Your Vault (RAG chat) */}
-      <div className="bg-zinc-900 border border-emerald-900/40 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <MessageCircleQuestion className="text-emerald-400 w-6 h-6" /> Ask Your Vault
-          </h2>
+      <TerminalWindow
+        title="ASK_YOUR_VAULT"
+        titleRight={
           <button
-            onClick={handleReindex}
+            onClick={e => { e.stopPropagation(); handleReindex() }}
             disabled={reindexing}
             title="Backfill embeddings for articles saved before semantic search existed"
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-400 transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-term-bg hover:opacity-70 disabled:opacity-50 cursor-pointer"
           >
-            <Database className="w-3.5 h-3.5" /> {reindexing ? 'Starting...' : 'Reindex Vault'}
+            <Database className="w-3 h-3" /> {reindexing ? 'starting...' : 'reindex vault'}
           </button>
-        </div>
-        <p className="text-zinc-400 text-sm mb-4">
-          Ask a question across everything you've liked, summarized, or saved — answered using only your own notes, with citations.
+        }
+      >
+        <p className="text-term-muted text-xs mb-4 flex items-center gap-1.5">
+          <MessageCircleQuestion className="w-3.5 h-3.5" /> ask a question across everything you've liked, summarized, or saved — answered using only your own notes, with citations.
         </p>
         <div className="flex gap-2 mb-4">
           <input
@@ -435,43 +433,41 @@ export default function KnowledgeGraph() {
             value={question}
             onChange={e => setQuestion(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleAsk()}
-            placeholder="e.g. What have I learned about Kubernetes RBAC?"
-            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            placeholder="e.g. what have I learned about kubernetes rbac?"
+            className="flex-1 bg-term-bg border border-term-border px-4 py-2.5 text-sm font-term text-term-primary placeholder:text-term-muted focus:outline-none focus:border-term-primary"
           />
-          <button
-            onClick={handleAsk}
-            disabled={asking || !question.trim()}
-            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-5 py-2.5 rounded-lg font-bold text-sm transition-colors cursor-pointer"
-          >
-            <Send className="w-4 h-4" /> {asking ? 'Thinking...' : 'Ask'}
-          </button>
+          <TerminalButton solid onClick={handleAsk} disabled={asking || !question.trim()}>
+            <span className="flex items-center gap-2">
+              <Send className="w-4 h-4" /> {asking ? 'thinking...' : 'ask'}
+            </span>
+          </TerminalButton>
         </div>
 
-        {askStatus && <p className="text-xs text-zinc-500 mb-3">{askStatus}</p>}
+        {askStatus && <p className="text-xs text-term-muted mb-3">{askStatus}</p>}
 
         {answer && (
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
-            <div className="prose prose-invert prose-sm max-w-none prose-p:leading-relaxed prose-headings:text-emerald-400 prose-a:text-blue-400">
+          <div className="bg-black border border-term-border p-4">
+            <div className="term-prose">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
             </div>
             {sources.length > 0 && (
-              <div className="mt-4 pt-3 border-t border-zinc-800 flex flex-wrap gap-2">
+              <div className="mt-4 pt-3 border-t border-dashed border-term-border flex flex-wrap gap-2">
                 {sources.map((s, i) => (
                   <a
                     key={i}
                     href={s.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-xs px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-emerald-400 transition-colors"
+                    className="text-[10px] font-bold px-2 py-1 border border-term-border text-term-muted hover:text-term-primary hover:border-term-primary transition-colors"
                   >
-                    📄 {s.title}
+                    &gt; {s.title}
                   </a>
                 ))}
               </div>
             )}
           </div>
         )}
-      </div>
+      </TerminalWindow>
     </div>
   )
 }
