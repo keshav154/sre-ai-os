@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check, Folder, ChevronDown, ChevronRight, Pencil, Trash2 } from "lucide-react"
 import { TerminalWindow, TerminalButton, AsciiDivider, Blinker, StatusTag, TerminalPromptInput } from '@/components/terminal'
+import { ReaderModal } from '@/components/ReaderModal'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -43,6 +44,7 @@ export default function Dashboard() {
   const [editDraft, setEditDraft] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [readerItem, setReaderItem] = useState<{url:string;title:string;source?:string}|null>(null)
   const itemsPerPage = 12
 
   const showToast = (msg: string, type: 'error' | 'success' = 'error') => {
@@ -663,6 +665,13 @@ export default function Dashboard() {
           </div>
 
           <div className="mt-auto flex flex-wrap gap-x-3 gap-y-1.5 items-center pt-2 border-t border-dashed border-term-border" onClick={e => e.stopPropagation()}>
+            <TerminalButton
+              size="sm"
+              variant={item.source === 'YouTube' ? 'error' : 'primary'}
+              onClick={() => setReaderItem({url: item.url, title: item.title, source: item.source})}
+            >
+              {item.source === 'YouTube' ? 'watch' : 'read'}
+            </TerminalButton>
             <button
               onClick={() => handleLike(item.url, item)}
               disabled={isLiking || isLiked}
@@ -748,6 +757,13 @@ export default function Dashboard() {
                   className="text-term-muted hover:text-term-error disabled:opacity-50 cursor-pointer"
                 >
                   <Trash2 className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={e => { e.stopPropagation(); setReaderItem({url: item.url, title: item.title, source: item.source}) }}
+                  title={item.source === 'YouTube' ? 'Watch in-app' : 'Read in-app'}
+                  className="text-term-muted hover:text-term-primary cursor-pointer"
+                >
+                  <BookOpen className="w-3 h-3" />
                 </button>
               </span>
             )}
@@ -893,6 +909,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-term-bg text-term-primary p-6 font-term">
+      <ReaderModal item={readerItem} onClose={() => setReaderItem(null)} />
       {/* Toast notification */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 border font-bold text-sm max-w-sm bg-term-bg

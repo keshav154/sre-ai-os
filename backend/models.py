@@ -139,3 +139,27 @@ class TimeLog(Base):
     duration_minutes = Column(Integer)
     notes = Column(Text, nullable=True)
     log_date = Column(DateTime(timezone=True), server_default=func.now())
+
+class Highlight(Base):
+    __tablename__ = "highlights"
+    id = Column(Integer, primary_key=True, index=True)
+    article_url = Column(String, index=True)
+    article_title = Column(String, nullable=True)
+    text = Column(Text)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class Collection(Base):
+    __tablename__ = "collections"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    description = Column(Text, nullable=True)
+    color = Column(String, default="#22c55e")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class CollectionItem(Base):
+    __tablename__ = "collection_items"
+    id = Column(Integer, primary_key=True, index=True)
+    collection_id = Column(Integer, index=True)
+    article_id = Column(Integer, index=True)
+    added_at = Column(DateTime(timezone=True), server_default=func.now())

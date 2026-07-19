@@ -61,6 +61,10 @@ _add_missing_columns("learning_steps", {
 
 app = FastAPI(title="SRE AI OS API")
 
+# ─── Second-brain tables ─────────────────────────────────────────────────────
+# highlights / collections / collection_items are created by create_all()
+# on first boot; no ALTER TABLE needed since they're new tables.
+
 # ─── Auth gate ──────────────────────────────────────────────────────────────
 # This app has no per-user data separation (see /auth/signup) — logging in
 # just proves you're allowed in the door, everyone who's signed up shares
@@ -1787,4 +1791,195 @@ def delete_time_log(log_id: int, db: Session = Depends(get_db)):
     db.query(models.TimeLog).filter(models.TimeLog.id == log_id).delete()
     db.commit()
     return {"message": "Deleted"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Second-brain: in-app reader
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/reader")
+def get_reader_content(url: str, db: Session = Depends(get_db)):
+    """Fetch article content for the in-app reader.
+    For YouTube URLs returns embed metadata; for articles returns cleaned text."""
+    from collector import extract_youtube_id, _fetch_direct, fetch_via_jina_reader
+
+    youtube_id = extract_youtube_id(url)
+    if youtube_id:
+        article = db.query(models.Article).filter(models.Article.url == url).first()
+        return {
+            "is_youtube": True,
+            "youtube_id": youtube_id,
+            "title": article.title if article else "",
+            "content": article.content if article else "",
+        }
+
+    article = db.query(models.Article).filter(models.Article.url == url).first()
+    if article and article.content and len(article.content.strip()) > 100:
+        return {"is_youtube": False, "title": article.title, "content": article.content}
+
+    title, content = _fetch_direct(url)
+    if not content:
+        title, content = fetch_via_jina_reader(url)
+
+    return {
+        "is_youtube": False,
+        "title": title or (article.title if article else url),
+        "content": content or "Could not fetch article content. The site may be paywalled or bot-protected.",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Highlights
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HighlightCreate(BaseModel):
+    article_url: str
+    article_title: Optional[str] = None
+    text: str
+    note: Optional[str] = None
+
+
+@app.get("/highlights")
+def get_highlights(article_url: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(models.Highlight)
+    if article_url:
+        q = q.filter(models.Highlight.article_url == article_url)
+    return q.order_by(models.Highlight.created_at.desc()).all()
+
+
+@app.post("/highlights")
+def create_highlight(req: HighlightCreate, db: Session = Depends(get_db)):
+    h = models.Highlight(
+        article_url=req.article_url,
+        article_title=req.article_title,
+        text=req.text,
+        note=req.note,
+    )
+    db.add(h)
+    db.commit()
+    db.refresh(h)
+    return h
+
+
+@app.delete("/highlights/{highlight_id}")
+def delete_highlight(highlight_id: int, db: Session = Depends(get_db)):
+    h = db.query(models.Highlight).filter(models.Highlight.id == highlight_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Highlight not found")
+    db.delete(h)
+    db.commit()
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Collections
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CollectionCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    color: Optional[str] = "#22c55e"
+
+
+class CollectionUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+
+
+class CollectionItemAdd(BaseModel):
+    article_id: int
+
+
+@app.get("/collections")
+def get_collections(db: Session = Depends(get_db)):
+    colls = db.query(models.Collection).order_by(models.Collection.created_at).all()
+    result = []
+    for c in colls:
+        count = db.query(models.CollectionItem).filter(
+            models.CollectionItem.collection_id == c.id
+        ).count()
+        result.append({
+            "id": c.id,
+            "name": c.name,
+            "description": c.description,
+            "color": c.color,
+            "item_count": count,
+            "created_at": str(c.created_at),
+        })
+    return result
+
+
+@app.post("/collections")
+def create_collection(req: CollectionCreate, db: Session = Depends(get_db)):
+    c = models.Collection(name=req.name, description=req.description, color=req.color)
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+@app.put("/collections/{collection_id}")
+def update_collection(collection_id: int, req: CollectionUpdate, db: Session = Depends(get_db)):
+    c = db.query(models.Collection).filter(models.Collection.id == collection_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    if req.name is not None:
+        c.name = req.name
+    if req.description is not None:
+        c.description = req.description
+    if req.color is not None:
+        c.color = req.color
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+@app.delete("/collections/{collection_id}")
+def delete_collection(collection_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Collection).filter(models.Collection.id == collection_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    db.query(models.CollectionItem).filter(
+        models.CollectionItem.collection_id == collection_id
+    ).delete()
+    db.delete(c)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/collections/{collection_id}/items")
+def get_collection_items(collection_id: int, db: Session = Depends(get_db)):
+    items = db.query(models.CollectionItem).filter(
+        models.CollectionItem.collection_id == collection_id
+    ).all()
+    article_ids = [i.article_id for i in items]
+    if not article_ids:
+        return []
+    articles = db.query(models.Article).filter(models.Article.id.in_(article_ids)).all()
+    return articles
+
+
+@app.post("/collections/{collection_id}/items")
+def add_to_collection(collection_id: int, req: CollectionItemAdd, db: Session = Depends(get_db)):
+    existing = db.query(models.CollectionItem).filter(
+        models.CollectionItem.collection_id == collection_id,
+        models.CollectionItem.article_id == req.article_id,
+    ).first()
+    if existing:
+        return {"ok": True, "duplicate": True}
+    item = models.CollectionItem(collection_id=collection_id, article_id=req.article_id)
+    db.add(item)
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/collections/{collection_id}/items/{article_id}")
+def remove_from_collection(collection_id: int, article_id: int, db: Session = Depends(get_db)):
+    db.query(models.CollectionItem).filter(
+        models.CollectionItem.collection_id == collection_id,
+        models.CollectionItem.article_id == article_id,
+    ).delete()
+    db.commit()
+    return {"ok": True}
 
