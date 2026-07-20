@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import { BookOpen, Activity, Zap, RefreshCw, Terminal, Bookmark, Eye, EyeOff, X, AlertCircle, Heart, Sparkles, FileText, Lightbulb, Target, Check, Folder, ChevronDown, ChevronRight, Pencil, Trash2 } from "lucide-react"
 import { TerminalWindow, TerminalButton, AsciiDivider, Blinker, StatusTag, TerminalPromptInput } from '@/components/terminal'
 import { ReaderModal } from '@/components/ReaderModal'
+import { DailyBriefing } from '@/components/DailyBriefing'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -951,6 +952,11 @@ export default function Dashboard() {
         </div>
       </header>
 
+      <DailyBriefing
+        onReadArticle={item => setReaderItem(item)}
+        onGoToQuiz={() => window.location.href = '/quiz'}
+        onGoToFeed={() => { setActiveTab('feed'); document.getElementById('live-feed')?.scrollIntoView({ behavior: 'smooth' }) }}
+      />
       {/* Agent Suggestions inbox — proactive, human-reviewed proposals from
           the reflect loop. Nothing here was created without a review step. */}
       {suggestions.length > 0 && (
@@ -987,6 +993,7 @@ export default function Dashboard() {
         <div className="lg:col-span-2 space-y-6">
 
           {/* Feed tabs */}
+          <div id="live-feed" />
           {liveFeed.length > 0 && (
             <TerminalWindow title="LIVE_FEED">
               {/* Tab row + controls */}

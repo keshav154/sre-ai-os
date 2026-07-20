@@ -1983,3 +1983,59 @@ def remove_from_collection(collection_id: int, article_id: int, db: Session = De
     db.commit()
     return {"ok": True}
 
+
+
+@app.get("/daily-briefing")
+def daily_briefing(db: Session = Depends(get_db)):
+    import random as _random
+    now = datetime.datetime.now(datetime.timezone.utc)
+    yesterday = now - datetime.timedelta(days=1)
+    week_ago  = now - datetime.timedelta(days=7)
+
+    new_count  = db.query(models.Article).filter(models.Article.created_at >= yesterday).count()
+    quiz_due   = db.query(models.QuizQuestion).filter(models.QuizQuestion.next_review_at <= now).count()
+    total_highlights = db.query(models.Highlight).count()
+
+    old_hl = db.query(models.Highlight).filter(models.Highlight.created_at <= week_ago).all()
+    resurfaced = None
+    if old_hl:
+        h = _random.choice(old_hl)
+        resurfaced = {
+            "text": h.text,
+            "note": h.note,
+            "article_title": h.article_title,
+            "created_at": h.created_at.isoformat() if h.created_at else None,
+        }
+
+    top = (
+        db.query(models.Article)
+        .filter(models.Article.created_at >= yesterday)
+        .order_by(models.Article.actionability_score.desc())
+        .first()
+    )
+    if not top:
+        top = (
+            db.query(models.Article)
+            .filter(models.Article.created_at >= now - datetime.timedelta(days=7))
+            .order_by(models.Article.actionability_score.desc())
+            .first()
+        )
+
+    top_article = None
+    if top:
+        top_article = {
+            "id": top.id,
+            "title": top.title,
+            "url": top.url,
+            "source": top.source,
+            "summary": (top.summary or "")[:200],
+        }
+
+    return {
+        "new_articles_count": new_count,
+        "quiz_due_count": quiz_due,
+        "total_highlights": total_highlights,
+        "resurfaced_highlight": resurfaced,
+        "top_article": top_article,
+        "date": now.strftime("%A, %b %-d"),
+    }
